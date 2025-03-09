@@ -48,23 +48,6 @@ type TraceInstance struct {
 	updateChan   chan dbOperation // 添加通道用于异步数据库操作
 }
 
-// TraceIndent 存储函数调用的缩进信息和父函数名称
-type TraceIndent struct {
-	Indent      int            // 当前缩进级别
-	ParentFuncs map[int]string // 每一层的父函数名称
-}
-
-// dbOperation 定义数据库操作
-type dbOperation struct {
-	query string
-	args  []interface{}
-}
-
-type TraceParams struct {
-	Pos   int    // 记录参数的位置
-	Param string // 记录函数参数
-}
-
 // NewTraceInstance initializes the singleton instance of TraceInstance.
 func NewTraceInstance() *TraceInstance {
 	once.Do(func() {
@@ -188,14 +171,13 @@ func (t *TraceInstance) enterTrace(id uint64, name string, params []interface{})
 		Name:           name,
 		GID:            id,
 		Indent:         indent,
-		Params:         string(paramsJSON),
 		ParentFuncName: parentFunc,
 		CreatedAt:      time.Now().Format("2006-01-02 15:04:05"),
 		Seq:            time.Since(currentNow).String(),
 	}
 
 	result, err := t.db.Exec("INSERT INTO TraceData (name, gid, indent, params, parentFuncname, createdAt, seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		traceData.Name, traceData.GID, traceData.Indent, traceData.Params, traceData.ParentFuncName, traceData.CreatedAt, traceData.Seq)
+		traceData.Name, traceData.GID, traceData.Indent, paramsJSON, traceData.ParentFuncName, traceData.CreatedAt, traceData.Seq)
 	if err != nil {
 		t.log.Error("Failed to execute insert query", "error", err)
 		return
