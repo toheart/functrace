@@ -2,266 +2,147 @@ package functrace
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3" // 引入 sqlite3 驱动
-	"github.com/sourcegraph/conc/pool"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-/*
-*
-@file:
-@author: levi.Tang
-@time: 2024/10/27 22:45
-@description:
-*
-*/
-// EnableFlag defines the environment variable to enable trace functionality with optional database logging.
-const (
-	IgnoreNames = "log,context"
-)
+// Trace 是一个装饰器，用于跟踪函数的进入和退出
+func Trace(params []interface{}) func() {
+	// 获取 TraceInstance 单例
+	instance := NewTraceInstance()
 
-var (
-	once        sync.Once
-	singleTrace *TraceInstance
-	currentNow  time.Time
-)
-
-// TraceInstance is a singleton structure that manages function tracing.
-type TraceInstance struct {
-	sync.Mutex
-	indentations map[uint64]*TraceIndent
-	log          *slog.Logger
-	db           *sql.DB          // 修改为 sql.DB
-	closed       bool             // 添加标志位表示是否已关闭
-	updateChan   chan dbOperation // 添加通道用于异步数据库操作
-}
-
-// NewTraceInstance initializes the singleton instance of TraceInstance.
-func NewTraceInstance() *TraceInstance {
-	once.Do(func() {
-		var err error
-		singleTrace = &TraceInstance{
-			indentations: make(map[uint64]*TraceIndent),
-			log:          initializeLogger(),
-			closed:       false,
-			updateChan:   make(chan dbOperation, 20), // 创建带缓冲的通道
-		}
-		var dbName string
-		index := 0
-		for {
-			currentNow = time.Now()
-			dbName = fmt.Sprintf("trace_%d.db", index)
-			if _, err := os.Stat(dbName); os.IsNotExist(err) {
-				var err error
-				singleTrace.db, err = sql.Open("sqlite3", dbName) // 使用 sqlite3
-				if err == nil {
-					break
-				}
-			}
-			index++
-		}
-		if err != nil {
-			singleTrace.log.Error("Unable to open database", "error", err)
-			return
-		}
-
-		// 测试数据库连接
-		if err = singleTrace.db.Ping(); err != nil {
-			singleTrace.log.Error("Unable to connect to database", "error", err)
-			return
-		}
-
-		_, err = singleTrace.db.Exec("CREATE TABLE IF NOT EXISTS TraceData (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, gid INTEGER, indent INTEGER, params TEXT, timeCost TEXT, parentFuncname TEXT, createdAt TEXT, seq TEXT)") // 创建表，添加 parentFuncname 字段
-		if err != nil {
-			singleTrace.log.Error("Unable to create table", "error", err)
-			return
-		}
-		_, err = singleTrace.db.Exec("CREATE INDEX IF NOT EXISTS idx_gid ON TraceData (gid)") // 对Gid创建索引
-		if err != nil {
-			singleTrace.log.Error("Unable to create index on gid", "error", err)
-			return
-		}
-		// 添加对 parentFuncname 的索引
-		_, err = singleTrace.db.Exec("CREATE INDEX IF NOT EXISTS idx_parent ON TraceData (parentFuncname)")
-		if err != nil {
-			singleTrace.log.Error("Unable to create index on parentFuncname", "error", err)
-			return
-		}
-		// 启动异步处理数据库操作的协程
-		go singleTrace.processDBUpdate()
-	})
-	return singleTrace
-}
-
-func (t *TraceInstance) processDBUpdate() {
-	p := pool.New().WithMaxGoroutines(10)
-	for op := range t.updateChan {
-		p.Go(func() {
-			result, err := t.db.Exec(op.query, op.args...)
-			if err != nil {
-				t.log.Error("Failed to execute update query", "error", err)
-				return
-			}
-			t.log.Info("update query success", "result", result)
-		})
+	// 获取调用者信息
+	pc, _, _, ok := runtime.Caller(1)
+	if !ok {
+		instance.log.Error("can't find caller")
+		return func() {}
 	}
 
-	p.Wait()
+	// 获取 goroutine ID 和函数名
+	id := getGID()
+	fn := runtime.FuncForPC(pc)
+	name := fn.Name()
+
+	// 检查是否应该跳过此函数
+	if skipFunction(name) {
+		return func() {}
+	}
+
+	// 确保 TraceIndent 已初始化
+	instance.initTraceIndentIfNeeded(id)
+
+	// 记录函数进入
+	traceId, startTime := instance.enterTrace(id, name, params)
+
+	// 返回用于记录函数退出的闭包
+	return func() {
+		instance.exitTrace(id, name, startTime, traceId)
+	}
 }
 
-func initializeLogger() *slog.Logger {
-	log := slog.New(slog.NewTextHandler(&lumberjack.Logger{
-		Filename:  "./trace.log",
-		LocalTime: true,
-		Compress:  true,
-	}, nil))
-	return log
-}
-
-// enterTrace logs the entry of a function call and stores necessary trace details.
-func (t *TraceInstance) enterTrace(id uint64, name string, params []interface{}) (lastInsertId int64, startTime time.Time) {
-	t.Lock()
+// enterTrace 记录函数调用的开始并存储必要的跟踪详情
+func (t *TraceInstance) enterTrace(id uint64, name string, params []interface{}) (traceId int64, startTime time.Time) {
 	startTime = time.Now() // 记录开始时间
+
+	// 获取跟踪信息和全局ID
+	indent, parentId, traceId := t.prepareTraceInfo(id, name)
+
+	// 准备参数输出
+	traceParams := prepareParamsOutput(params)
+	paramsJSON, err := json.Marshal(traceParams)
+	if err != nil {
+		t.log.Error("can't convert params to json", "error", err)
+		return traceId, startTime
+	}
+
+	// 创建跟踪数据
+	traceData := TraceData{
+		ID:        traceId,
+		Name:      name,
+		GID:       id,
+		Indent:    indent,
+		ParentId:  parentId,
+		CreatedAt: time.Now().Format(TimeFormat),
+		Seq:       time.Since(currentNow).String(),
+	}
+
+	// 发送数据库插入操作
+	t.sendDBOperation(id, OpTypeInsert, SQLInsertTrace, []interface{}{
+		traceData.ID, traceData.Name, traceData.GID, traceData.Indent,
+		paramsJSON, traceData.ParentId, traceData.CreatedAt, traceData.Seq,
+	})
+
+	// 记录日志
+	t.logFunctionEntry(id, name, indent, parentId, string(paramsJSON), startTime)
+
+	return traceId, startTime
+}
+
+// prepareTraceInfo 准备跟踪信息并返回缩进级别、父ID和新的跟踪ID
+func (t *TraceInstance) prepareTraceInfo(id uint64, name string) (indent int, parentId int64, traceId int64) {
+	t.Lock()
+	defer t.Unlock()
 
 	// 获取或初始化 TraceIndent
 	traceIndent, exists := t.indentations[id]
 	if !exists {
 		traceIndent = &TraceIndent{
 			Indent:      0,
-			ParentFuncs: make(map[int]string),
+			ParentFuncs: make(map[int]int64),
 		}
 		t.indentations[id] = traceIndent
 	}
 
-	// 获取当前缩进和父函数名称
-	indent := traceIndent.Indent
-	parentFunc := traceIndent.ParentFuncs[indent-1] // 获取上一层的函数名称作为父函数
+	// 获取当前缩进和父函数ID
+	indent = traceIndent.Indent
+	parentId = traceIndent.ParentFuncs[indent-1] // 获取上一层的函数ID作为父函数
 
-	// 更新缩进和父函数名称
-	traceIndent.ParentFuncs[indent] = name // 当前层的函数名称
+	// 生成全局唯一ID
+	traceId = t.globalId.Add(1)
+
+	// 更新缩进和父函数ID
+	traceIndent.ParentFuncs[indent] = traceId // 使用生成的traceId作为当前函数ID
 	traceIndent.Indent++
 
-	t.Unlock()
-
-	// 生成缩进字符串
-	indents := generateIndentString(indent)
-
-	// 准备参数输出
-	traceParams := prepareParamsOutput(params)
-
-	// 将 traceParams 转换为 JSON 字符串
-	paramsJSON, err := json.Marshal(traceParams)
-	if err != nil {
-		t.log.Error("Failed to convert parameters to JSON", "error", err)
-		return 0, startTime
-	}
-	traceData := TraceData{
-		Name:           name,
-		GID:            id,
-		Indent:         indent,
-		ParentFuncName: parentFunc,
-		CreatedAt:      time.Now().Format("2006-01-02 15:04:05"),
-		Seq:            time.Since(currentNow).String(),
-	}
-
-	result, err := t.db.Exec("INSERT INTO TraceData (name, gid, indent, params, parentFuncname, createdAt, seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		traceData.Name, traceData.GID, traceData.Indent, paramsJSON, traceData.ParentFuncName, traceData.CreatedAt, traceData.Seq)
-	if err != nil {
-		t.log.Error("Failed to execute insert query", "error", err)
-		return
-	}
-
-	if err != nil {
-		t.log.Error("Failed to execute insert query", "error", err)
-		return
-	}
-
-	lastInsertId, err = result.LastInsertId()
-	if err != nil {
-		t.log.Error("Failed to get last insert ID", "error", err)
-		return
-	}
-
-	// 构建更美观的日志输出
-	var logBuilder strings.Builder
-	logBuilder.WriteString(fmt.Sprintf("%s -> %s", indents, name))
-
-	if parentFunc != "" {
-		logBuilder.WriteString(fmt.Sprintf(" (父函数: %s)", parentFunc))
-	}
-	// 记录日志，包含更多有用信息
-	t.log.Info(logBuilder.String(),
-		"goroutine", id,
-		"参数", string(paramsJSON),
-		"时间", startTime.Format("15:04:05.000"))
-
-	return lastInsertId, time.Now()
+	return indent, parentId, traceId
 }
 
-func generateIndentString(indent int) string {
-	return strings.Repeat("**", indent)
-}
-
-func prepareParamsOutput(params []interface{}) []*TraceParams {
-	var traceParams []*TraceParams
-
-	// 如果没有参数，返回一个特殊标记
-	if len(params) == 0 {
-		traceParams = append(traceParams, &TraceParams{
-			Pos:   -1,
-			Param: "No parameters",
-		})
-		return traceParams
+// exitTrace 记录函数调用的结束并减少跟踪缩进
+func (t *TraceInstance) exitTrace(id uint64, name string, startTime time.Time, traceId int64) {
+	// 更新跟踪信息
+	indent := t.updateTraceIndent(id)
+	if indent < 0 {
+		return // 处理错误情况
 	}
 
-	// 处理参数
-	for i, item := range params {
-		traceParams = append(traceParams, &TraceParams{
-			Pos:   i,
-			Param: formatParam(i, item),
-		})
-	}
+	// 计算函数执行时间
+	duration := time.Since(startTime)
+	durationStr := formatDuration(duration)
 
-	return traceParams
+	// 发送数据库更新操作
+	t.sendDBOperation(id, OpTypeUpdate, SQLUpdateTimeCost, []interface{}{
+		duration.String(), traceId,
+	})
+
+	// 记录日志
+	t.logFunctionExit(id, name, indent, durationStr)
 }
 
-func formatParam(index int, item interface{}) string {
-	val := reflect.ValueOf(item)
-	if !val.IsValid() {
-		return fmt.Sprintf("#%d: nil", index)
-	}
-
-	// 获取参数类型名称
-	typeName := val.Type().String()
-
-	// 使用 Output 函数获取格式化后的值
-	formattedValue := Output(item, val)
-
-	return fmt.Sprintf("#%d(%s): %s", index, typeName, formattedValue)
-}
-
-// exitTrace logs the exit of a function call and decrements the trace indentation.
-func (t *TraceInstance) exitTrace(id uint64, name string, startTime time.Time, lastInsertId int64) {
+// updateTraceIndent 更新跟踪缩进并返回当前缩进级别
+func (t *TraceInstance) updateTraceIndent(id uint64) int {
 	t.Lock()
+	defer t.Unlock()
 
 	// 获取 TraceIndent
 	traceIndent, exists := t.indentations[id]
 	if !exists {
-		t.log.Error("Cannot find TraceIndent for goroutine", "goroutine", id)
-		t.Unlock()
-		return
+		t.log.Error("can't find TraceIndent for goroutine", "goroutine", id)
+		return -1
 	}
 
 	// 获取当前缩进
@@ -275,35 +156,38 @@ func (t *TraceInstance) exitTrace(id uint64, name string, startTime time.Time, l
 
 	// 如果缩进小于等于0，清除所有父函数名称
 	if traceIndent.Indent <= 0 {
-		traceIndent.ParentFuncs = make(map[int]string)
+		traceIndent.ParentFuncs = make(map[int]int64)
 	}
 
-	t.Unlock()
+	return indent
+}
 
-	// 计算函数执行时间
-	duration := time.Since(startTime)
+// getGID 获取当前goroutine的ID
+func getGID() uint64 {
+	b := make([]byte, 64)
+	b = b[:runtime.Stack(b, false)]
+	b = bytes.TrimPrefix(b, []byte("goroutine "))
+	b = b[:bytes.IndexByte(b, ' ')]
+	n, _ := strconv.ParseUint(string(b), 10, 64)
+	return n
+}
 
-	// 生成缩进字符串
-	indents := generateIndentString(indent - 1)
-
-	// 构建更美观的日志输出
-	var logBuilder strings.Builder
-	logBuilder.WriteString(fmt.Sprintf("%s <- %s", indents, name))
-
-	// 格式化执行时间
-	durationStr := formatDuration(duration)
-
-	// 记录日志，包含更多有用信息
-	t.log.Info(logBuilder.String(),
-		"goroutine", id,
-		"耗时", durationStr,
-		"时间", time.Now().Format("15:04:05.000"))
-
-	// 异步更新数据库
-	t.updateChan <- dbOperation{
-		query: "UPDATE TraceData SET timeCost = ? WHERE id = ?",
-		args:  []interface{}{duration.String(), lastInsertId},
+// skipFunction 检查是否应该跳过跟踪某个函数
+func skipFunction(name string) bool {
+	ignoreEnv := os.Getenv(EnvIgnoreNames)
+	var ignoreNames []string
+	if ignoreEnv != "" {
+		ignoreNames = strings.Split(ignoreEnv, ",")
+	} else {
+		ignoreNames = strings.Split(IgnoreNames, ",")
 	}
+
+	for _, ignoreName := range ignoreNames {
+		if strings.Contains(strings.ToLower(name), ignoreName) {
+			return true
+		}
+	}
+	return false
 }
 
 // formatDuration 格式化持续时间，使其更易读
@@ -317,149 +201,4 @@ func formatDuration(d time.Duration) string {
 	} else {
 		return fmt.Sprintf("%.2f s", d.Seconds())
 	}
-}
-
-// getGID retrieves the current goroutine's ID.
-func getGID() uint64 {
-	b := make([]byte, 64)
-	b = b[:runtime.Stack(b, false)]
-	b = bytes.TrimPrefix(b, []byte("goroutine "))
-	b = b[:bytes.IndexByte(b, ' ')]
-	n, _ := strconv.ParseUint(string(b), 10, 64)
-	return n
-}
-
-// Trace is a decorator that traces function entry and exit.
-func Trace(params []interface{}) func() {
-	instance := NewTraceInstance()
-	pc, _, _, ok := runtime.Caller(1)
-	if !ok {
-		panic("not found caller")
-	}
-
-	id := getGID()
-	fn := runtime.FuncForPC(pc)
-	name := fn.Name()
-
-	if skipFunction(name) {
-		return func() {}
-	}
-
-	// 确保 TraceIndent 已初始化
-	instance.Lock()
-	if _, exists := instance.indentations[id]; !exists {
-		instance.indentations[id] = &TraceIndent{
-			Indent:      0,
-			ParentFuncs: make(map[int]string),
-		}
-	}
-	instance.Unlock()
-
-	lastInsertId, startTime := instance.enterTrace(id, name, params)
-	return func() { instance.exitTrace(id, name, startTime, lastInsertId) }
-}
-
-func skipFunction(name string) bool {
-	ignoreEnv := os.Getenv("IgnoreNames")
-	var ignoreNames []string
-	if ignoreEnv != "" {
-		ignoreNames = strings.Split(ignoreEnv, ",")
-	} else {
-		ignoreNames = strings.Split(IgnoreNames, ",")
-	}
-	for _, ignoreName := range ignoreNames {
-		if strings.Contains(strings.ToLower(name), ignoreName) {
-			return true
-		}
-	}
-	return false
-}
-
-// Output formats trace parameters based on their type for logging.
-func Output(item interface{}, val reflect.Value) string {
-	if !val.IsValid() {
-		return "nil"
-	}
-
-	switch val.Kind() {
-	case reflect.Func:
-		return fmt.Sprintf("func(%s)", runtime.FuncForPC(val.Pointer()).Name())
-	case reflect.String:
-		// 不再限制字符串长度，完整输出
-		return fmt.Sprintf("\"%s\"", val.String())
-	case reflect.Ptr:
-		if val.IsNil() {
-			return "nil"
-		}
-		return fmt.Sprintf("&%s", Output(val.Elem().Interface(), val.Elem()))
-	case reflect.Interface:
-		if val.IsNil() {
-			return "nil"
-		}
-		return Output(val.Elem().Interface(), val.Elem())
-	case reflect.Struct:
-		// 完整输出结构体内容，并添加类型信息
-		typeName := val.Type().String()
-		return fmt.Sprintf("%s: %+v", typeName, item)
-	case reflect.Map:
-		// 完整输出 Map 内容，并添加类型信息
-		if val.IsNil() {
-			return "nil"
-		}
-		typeName := val.Type().String()
-		return fmt.Sprintf("%s: %+v", typeName, item)
-	case reflect.Slice, reflect.Array:
-		// 完整输出切片/数组内容，并添加类型信息
-		if val.Kind() == reflect.Slice && val.IsNil() {
-			return "nil"
-		}
-		typeName := val.Type().String()
-		return fmt.Sprintf("%s: %+v", typeName, item)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return fmt.Sprintf("%d", val.Int())
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return fmt.Sprintf("%d", val.Uint())
-	case reflect.Float32, reflect.Float64:
-		return fmt.Sprintf("%.4f", val.Float())
-	case reflect.Bool:
-		return fmt.Sprintf("%v", val.Bool())
-	case reflect.Chan:
-		if val.IsNil() {
-			return "nil"
-		}
-		typeName := val.Type().String()
-		return fmt.Sprintf("%s: (chan)", typeName)
-	case reflect.Complex64, reflect.Complex128:
-		return fmt.Sprintf("%v", val.Complex())
-	default:
-		typeName := val.Type().String()
-		return fmt.Sprintf("%s: %+v", typeName, item)
-	}
-}
-
-// Close closes the database connection and releases resources.
-func (t *TraceInstance) Close() error {
-	t.Lock()
-	defer t.Unlock()
-
-	if t.closed {
-		return nil
-	}
-
-	t.closed = true
-
-	close(t.updateChan)
-
-	if t.db != nil {
-		return t.db.Close()
-	}
-	return nil
-}
-
-// CloseTraceInstance closes the singleton trace instance.
-func CloseTraceInstance() error {
-	if singleTrace != nil {
-		return singleTrace.Close()
-	}
-	return nil
 }

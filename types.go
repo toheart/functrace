@@ -1,30 +1,42 @@
 package functrace
 
+// OpType 定义数据库操作类型
+type OpType int
+
+// 数据库操作类型常量
+const (
+	OpTypeInsert OpType = iota // 插入操作
+	OpTypeUpdate               // 更新操作
+)
+
+// TraceData 存储跟踪数据的结构体
 type TraceData struct {
-	ID             int64         `json:"id"`
-	Name           string        `json:"name"`
-	GID            uint64        `json:"gid"`
-	Indent         int           `json:"indent"`
-	Params         []TraceParams `json:"params"`
-	TimeCost       string        `json:"timeCost"`
-	ParentFuncName string        `json:"parentFuncname"`
-	CreatedAt      string        `json:"createdAt"`
-	Seq            string        `json:"seq"`
+	ID        int64  `json:"id"`        // 唯一标识符
+	Name      string `json:"name"`      // 函数名称
+	GID       uint64 `json:"gid"`       // Goroutine ID
+	Indent    int    `json:"indent"`    // 缩进级别
+	Params    string `json:"params"`    // 参数JSON字符串
+	TimeCost  string `json:"timeCost"`  // 执行时间
+	ParentId  int64  `json:"parentId"`  // 父函数ID
+	CreatedAt string `json:"createdAt"` // 创建时间
+	Seq       string `json:"seq"`       // 序列号
 }
 
+// TraceParams 存储参数信息的结构体
 type TraceParams struct {
-	Pos   int    // 记录参数的位置
-	Param string // 记录函数参数
+	Pos   int    // 参数位置
+	Param string // 参数格式化后的字符串
 }
 
 // TraceIndent 存储函数调用的缩进信息和父函数名称
 type TraceIndent struct {
-	Indent      int            // 当前缩进级别
-	ParentFuncs map[int]string // 每一层的父函数名称
+	Indent      int           // 当前缩进级别
+	ParentFuncs map[int]int64 // 每一层当前父函数ID
 }
 
 // dbOperation 定义数据库操作
 type dbOperation struct {
-	query string
-	args  []interface{}
+	opType OpType        // 操作类型
+	query  string        // SQL查询语句
+	args   []interface{} // 查询参数
 }
