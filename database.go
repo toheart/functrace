@@ -27,6 +27,8 @@ func initDatabase() error {
 	if err != nil {
 		return fmt.Errorf("can't open db: %w", err)
 	}
+	singleTrace.db.SetMaxOpenConns(10)
+	singleTrace.db.SetMaxIdleConns(5)
 
 	// 测试数据库连接
 	if err = singleTrace.db.Ping(); err != nil {
