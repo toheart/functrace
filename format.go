@@ -13,11 +13,7 @@ func prepareParamsOutput(params []interface{}) []*TraceParams {
 
 	// 如果没有参数，返回一个特殊标记
 	if len(params) == 0 {
-		traceParams = append(traceParams, &TraceParams{
-			Pos:   -1,
-			Param: "No parameters",
-		})
-		return traceParams
+		return nil
 	}
 
 	// 处理参数

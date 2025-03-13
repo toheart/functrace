@@ -10,15 +10,14 @@ const (
 	EnvIgnoreNames       = "IGNORE_NAMES"
 
 	// 默认配置值
-	DefaultChannelCount      = 5
-	DefaultChannelBufferSize = 100
-	DefaultPoolSize          = 10
+	DefaultChannelCount      = 10 // 通道数量
+	DefaultChannelBufferSize = 20 // 通道缓冲区大小
 
 	// 日志文件配置
 	LogFileName = "./trace.log"
 
 	// 数据库相关
-	DBFileNameFormat = "%s_trace_%d.db"
+	DBFileNameFormat = "./%s_trace_%d.db"
 
 	// SQL语句
 	SQLCreateTable = `CREATE TABLE IF NOT EXISTS TraceData (

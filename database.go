@@ -4,11 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/glebarez/go-sqlite" // 引入 sqlite3 驱动
 	"github.com/sourcegraph/conc"
-	"github.com/sourcegraph/conc/pool"
 )
 
 // initDatabase 初始化数据库连接和表结构
@@ -21,6 +21,7 @@ func initDatabase() error {
 	if err != nil {
 		return fmt.Errorf("can't find available db name: %w", err)
 	}
+	singleTrace.log.Info("found dbName", "dbName", dbName)
 
 	// 打开数据库连接
 	singleTrace.db, err = sql.Open("sqlite", dbName)
@@ -49,9 +50,11 @@ func findAvailableDBName() (string, error) {
 	if err != nil {
 		execName = "default"
 	}
+	execName = execName[strings.LastIndex(execName, "/")+1:]
 	index := 0
 	for {
 		dbName := fmt.Sprintf(DBFileNameFormat, execName, index)
+
 		if _, err := os.Stat(dbName); os.IsNotExist(err) {
 			return dbName, nil
 		}
@@ -99,13 +102,8 @@ func (t *TraceInstance) processDBUpdate() {
 
 // processChannel 处理单个通道的数据库操作
 func (t *TraceInstance) processChannel(chanIndex int) {
-	pool := pool.New().WithMaxGoroutines(DefaultPoolSize)
-
 	for op := range t.updateChans[chanIndex] {
-		operation := op // 捕获变量
-		pool.Go(func() {
-			t.executeDBOperation(operation)
-		})
+		t.executeDBOperation(op)
 	}
 }
 

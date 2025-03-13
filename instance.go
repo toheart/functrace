@@ -35,12 +35,13 @@ func NewTraceInstance() *TraceInstance {
 	once.Do(func() {
 		// 初始化 TraceInstance
 		initTraceInstance()
-
+		singleTrace.log.Info("init TraceInstance success")
 		// 初始化数据库
 		if err := initDatabase(); err != nil {
-			singleTrace.log.Error("数据库初始化失败", "error", err)
+			singleTrace.log.Error("init database failed", "error", err)
 			return
 		}
+		singleTrace.log.Info("init database success")
 
 		// 启动异步处理数据库操作的协程
 		go singleTrace.processDBUpdate()
