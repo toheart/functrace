@@ -51,26 +51,25 @@ func findAvailableDBName() (string, error) {
 		execName = "default"
 	}
 	execName = execName[strings.LastIndex(execName, "/")+1:]
-	index := 0
-	for {
-		dbName := fmt.Sprintf(DBFileNameFormat, execName, index)
+	currentTime := time.Now().Format("20060102150405")
+	dbName := fmt.Sprintf(DBFileNameFormat, execName, currentTime)
 
-		if _, err := os.Stat(dbName); os.IsNotExist(err) {
-			return dbName, nil
-		}
-		index++
-		// 防止无限循环
-		if index > 1000 {
-			return "", fmt.Errorf("can't find available db name")
-		}
+	if _, err := os.Stat(dbName); os.IsNotExist(err) {
+		return dbName, nil
 	}
+	return "", fmt.Errorf("can't find available db name")
 }
 
 // createTablesAndIndexes 创建数据库表和索引
 func createTablesAndIndexes(db *sql.DB) error {
-	// 创建表
+	// 创建跟踪表
 	if _, err := db.Exec(SQLCreateTable); err != nil {
-		return fmt.Errorf("can't create table: %w", err)
+		return fmt.Errorf("can't create trace table: %w", err)
+	}
+
+	// 创建goroutine表
+	if _, err := db.Exec(SQLCreateGoroutineTable); err != nil {
+		return fmt.Errorf("can't create goroutine table: %w", err)
 	}
 
 	// 创建索引
@@ -80,6 +79,10 @@ func createTablesAndIndexes(db *sql.DB) error {
 
 	if _, err := db.Exec(SQLCreateParentIndex); err != nil {
 		return fmt.Errorf("can't create ParentId index: %w", err)
+	}
+
+	if _, err := db.Exec(SQLCreateGoroutineGIDIndex); err != nil {
+		return fmt.Errorf("can't create goroutine GID index: %w", err)
 	}
 
 	return nil
