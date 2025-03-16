@@ -24,12 +24,13 @@ func initDatabase() error {
 	singleTrace.log.Info("found dbName", "dbName", dbName)
 
 	// 打开数据库连接
-	singleTrace.db, err = sql.Open("sqlite", dbName)
+	singleTrace.db, err = sql.Open("sqlite", fmt.Sprintf("file:%s?cache=shared&_journal_mode=WAL", dbName))
 	if err != nil {
 		return fmt.Errorf("can't open db: %w", err)
 	}
-	singleTrace.db.SetMaxOpenConns(10)
-	singleTrace.db.SetMaxIdleConns(5)
+	singleTrace.db.SetMaxOpenConns(50)
+	singleTrace.db.SetMaxIdleConns(10)
+	singleTrace.db.SetConnMaxIdleTime(30 * time.Second)
 
 	// 测试数据库连接
 	if err = singleTrace.db.Ping(); err != nil {
