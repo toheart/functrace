@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/glebarez/go-sqlite" // 引入 sqlite3 驱动
 	"github.com/sourcegraph/conc"
+	_ "modernc.org/sqlite" // 引入 sqlite3 驱动
 )
 
 // initDatabase 初始化数据库连接和表结构
