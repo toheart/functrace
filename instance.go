@@ -28,11 +28,11 @@ type TraceInstance struct {
 	gGroutineId      atomic.Uint64
 	indentations     map[uint64]*TraceIndent
 	log              *slog.Logger
-	db               *sql.DB                  // 数据库连接
-	closed           bool                     // 标志位表示是否已关闭
-	updateChans      []chan dbOperation       // 多个通道用于异步数据库操作
-	chanCount        int                      // 通道数量
-	GoroutineRunning map[uint64]GoroutineInfo // 管理运行中的goroutine, key为gid, value为数据库id
+	db               *sql.DB                   // 数据库连接
+	closed           bool                      // 标志位表示是否已关闭
+	updateChans      []chan dbOperation        // 多个通道用于异步数据库操作
+	chanCount        int                       // 通道数量
+	GoroutineRunning map[uint64]*GoroutineInfo // 管理运行中的goroutine, key为gid, value为数据库id
 }
 
 // NewTraceInstance 初始化并返回 TraceInstance 的单例实例
@@ -84,7 +84,7 @@ func initTraceInstance() {
 		closed:           false,
 		updateChans:      updateChans,
 		chanCount:        chanCount,
-		GoroutineRunning: make(map[uint64]GoroutineInfo),
+		GoroutineRunning: make(map[uint64]*GoroutineInfo),
 	}
 }
 

@@ -38,21 +38,20 @@ const (
 	// Goroutine表创建语句
 	SQLCreateGoroutineTable = `CREATE TABLE IF NOT EXISTS GoroutineTrace (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, 
-		gid INTEGER, 
+		originGid INTEGER, 
 		timeCost TEXT, 
 		createTime TEXT, 
 		isFinished INTEGER, 
 		initFuncName TEXT
 	)`
 
-	SQLCreateGIDIndex          = "CREATE INDEX IF NOT EXISTS idx_gid ON TraceData (gid)"
-	SQLCreateParentIndex       = "CREATE INDEX IF NOT EXISTS idx_parent ON TraceData (parentId)"
-	SQLCreateGoroutineGIDIndex = "CREATE INDEX IF NOT EXISTS idx_goroutine_gid ON GoroutineTrace (gid)"
-	SQLInsertTrace             = "INSERT INTO TraceData (id, name, gid, indent, params, parentId, createdAt, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-	SQLUpdateTimeCost          = "UPDATE TraceData SET timeCost = ? WHERE id = ?"
+	SQLCreateGIDIndex    = "CREATE INDEX IF NOT EXISTS idx_gid ON TraceData (gid)"
+	SQLCreateParentIndex = "CREATE INDEX IF NOT EXISTS idx_parent ON TraceData (parentId)"
+	SQLInsertTrace       = "INSERT INTO TraceData (id, name, gid, indent, params, parentId, createdAt, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+	SQLUpdateTimeCost    = "UPDATE TraceData SET timeCost = ? WHERE id = ?"
 
 	// Goroutine表操作语句
-	SQLInsertGoroutine         = "INSERT INTO GoroutineTrace (id, gid, createTime, isFinished, initFuncName) VALUES (?, ?, ?, ?, ?)"
+	SQLInsertGoroutine         = "INSERT INTO GoroutineTrace (id, originGid, createTime, isFinished, initFuncName) VALUES (?, ?, ?, ?, ?)"
 	SQLUpdateGoroutineTimeCost = "UPDATE GoroutineTrace SET timeCost = ?, isFinished = ? WHERE id = ?"
 
 	// 查询特定goroutine的根函数调用

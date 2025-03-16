@@ -25,7 +25,7 @@ type TraceData struct {
 // GoroutineTrace 存储goroutine信息的结构体
 type GoroutineTrace struct {
 	ID           int64  `json:"id"`           // 自增ID
-	GID          uint64 `json:"gid"`          // Goroutine ID
+	OriginGID    uint64 `json:"originGid"`    // 原始Goroutine ID
 	TimeCost     string `json:"timeCost"`     // 执行时间
 	CreateTime   string `json:"createTime"`   // 创建时间
 	IsFinished   int    `json:"isFinished"`   // 是否完成
@@ -53,6 +53,6 @@ type dbOperation struct {
 
 type GoroutineInfo struct {
 	ID             uint64 `json:"id"`             // 自增ID
-	Gid            uint64 `json:"gid"`            // Goroutine ID
+	OriginGID      uint64 `json:"originGid"`      // 原始Goroutine ID
 	LastUpdateTime string `json:"lastUpdateTime"` // 最后更新时间
 }

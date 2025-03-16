@@ -24,7 +24,7 @@ func Trace(params []interface{}) func() {
 	}
 
 	// 获取 goroutine ID 和函数名
-	id := getGID()
+	gid := getGID()
 	fn := runtime.FuncForPC(pc)
 	name := fn.Name()
 
@@ -34,14 +34,13 @@ func Trace(params []interface{}) func() {
 	}
 
 	// 修改id值
-	info, _ := instance.initGoroutineIfNeeded(id, name)
-	id = info.ID
+	info, _ := instance.initGoroutineIfNeeded(gid, name)
 
 	// 确保 TraceIndent 已初始化
-	instance.initTraceIndentIfNeeded(id)
+	instance.initTraceIndentIfNeeded(info.ID)
 
 	// 记录函数进入
-	traceId, startTime := instance.enterTrace(id, name, params)
+	traceId, startTime := instance.enterTrace(info.ID, name, params)
 
 	// 返回用于记录函数退出的闭包
 	return func() {
@@ -71,7 +70,7 @@ func (t *TraceInstance) enterTrace(id uint64, name string, params []interface{})
 		GID:       id,
 		Indent:    indent,
 		ParentId:  parentId,
-		CreatedAt: time.Now().Format(TimeFormat),
+		CreatedAt: startTime.Format(TimeFormat),
 		Seq:       time.Since(currentNow).String(),
 	}
 
@@ -117,7 +116,7 @@ func (t *TraceInstance) prepareTraceInfo(id uint64) (indent int, parentId int64,
 }
 
 // exitTrace 记录函数调用的结束并减少跟踪缩进
-func (t *TraceInstance) exitTrace(info GoroutineInfo, name string, startTime time.Time, traceId int64) {
+func (t *TraceInstance) exitTrace(info *GoroutineInfo, name string, startTime time.Time, traceId int64) {
 	// 更新跟踪信息
 	indent := t.updateTraceIndent(info.ID)
 	if indent < 0 {
@@ -211,24 +210,32 @@ func formatDuration(d time.Duration) string {
 }
 
 // initGoroutineIfNeeded 检查goroutine是否已在跟踪中，如果不在则初始化
-func (t *TraceInstance) initGoroutineIfNeeded(gid uint64, name string) (info GoroutineInfo, initFunc bool) {
+func (t *TraceInstance) initGoroutineIfNeeded(gid uint64, name string) (info *GoroutineInfo, initFunc bool) {
+	// 判断该goroutine是否已经被跟踪
+	t.RLock()
+	info, exists := t.GoroutineRunning[gid]
+	t.RUnlock()
+
+	if exists {
+		return info, false
+	}
+
 	t.Lock()
 	defer t.Unlock()
-
-	// 判断该goroutine是否已经被跟踪
-	info, exists := t.GoroutineRunning[gid]
+	// 二次检查
+	info, exists = t.GoroutineRunning[gid]
 	if exists {
 		return info, false
 	}
 	// 更新运行中的goroutine映射
+	start := time.Now()
 	id := t.gGroutineId.Add(1)
-	t.GoroutineRunning[gid] = GoroutineInfo{
+	info = &GoroutineInfo{
 		ID:             id,
-		Gid:            gid,
-		LastUpdateTime: time.Now().Format(TimeFormat),
+		OriginGID:      gid,
+		LastUpdateTime: start.Format(TimeFormat),
 	}
-	// 发送goroutine初始化到数据库
-	createTime := time.Now().Format(TimeFormat)
+	t.GoroutineRunning[gid] = info
 	// 异步插入goroutine数据
 	go func(id uint64, gid uint64, funcName string, createTimeStr string) {
 		// 执行插入操作
@@ -239,25 +246,25 @@ func (t *TraceInstance) initGoroutineIfNeeded(gid uint64, name string) (info Gor
 		}
 
 		t.log.Info("initialized goroutine trace", "goroutine", id, "initFunc", funcName)
-	}(id, gid, name, createTime)
+	}(id, gid, name, start.Format(TimeFormat))
 
 	return info, true
 }
 
-func (t *TraceInstance) SetGoroutineRunning(info GoroutineInfo) {
+func (t *TraceInstance) SetGoroutineRunning(info *GoroutineInfo) {
 	t.Lock()
-	t.GoroutineRunning[info.Gid] = info
+	t.GoroutineRunning[info.OriginGID] = info
 	t.Unlock()
 }
 
-func (t *TraceInstance) GoroutineFinished(info GoroutineInfo) {
+func (t *TraceInstance) GoroutineFinished(info *GoroutineInfo) {
 	t.Lock()
-	delete(t.GoroutineRunning, info.Gid)
+	delete(t.GoroutineRunning, info.OriginGID)
 	t.Unlock()
 }
 
 // finishGoroutineTrace 完成对goroutine的跟踪
-func (t *TraceInstance) finishGoroutineTrace(info GoroutineInfo) {
+func (t *TraceInstance) finishGoroutineTrace(info *GoroutineInfo) {
 	t.log.Info("finishing goroutine trace", "id", info.ID)
 	// 获取goroutine创建时间
 	createTimeStr, err := t.getGoroutineCreateTime(info.ID)
@@ -289,9 +296,9 @@ func (t *TraceInstance) finishGoroutineTrace(info GoroutineInfo) {
 	t.updateGoroutineTimeCost(info.ID, totalExecTime.String(), 1)
 
 	// 从映射中移除
-	t.deleteGoroutineRunning(info.Gid)
+	t.deleteGoroutineRunning(info.OriginGID)
 	t.log.Info("completed goroutine trace",
-		"goroutine identifier", info.Gid,
+		"goroutine identifier", info.OriginGID,
 		"database id", info.ID,
 		"total execution time", totalExecTime.String())
 }
@@ -343,10 +350,10 @@ func (t *TraceInstance) monitorGoroutines() {
 	}
 }
 
-func (t *TraceInstance) GetGoroutineRunning() map[uint64]GoroutineInfo {
+func (t *TraceInstance) GetGoroutineRunning() map[uint64]*GoroutineInfo {
 	t.RLock()
 	defer t.RUnlock()
-	runningGoroutines := make(map[uint64]GoroutineInfo)
+	runningGoroutines := make(map[uint64]*GoroutineInfo)
 	for k, v := range t.GoroutineRunning {
 		runningGoroutines[k] = v
 	}
@@ -363,13 +370,13 @@ func (t *TraceInstance) checkAndFinishGoroutines() {
 	}
 
 	// 复制当前运行中的goroutine映射，以避免在迭代过程中修改
-	var finishedGoroutines []GoroutineInfo
+	var finishedGoroutines []*GoroutineInfo
 
 	runningGoroutines := t.GetGoroutineRunning()
 
 	// 检查哪些goroutine已经结束但未更新
 	for _, info := range runningGoroutines {
-		if _, exists := currentGoroutines[info.Gid]; !exists {
+		if _, exists := currentGoroutines[info.OriginGID]; !exists {
 			// 该goroutine不再运行，需要完成其跟踪
 			finishedGoroutines = append(finishedGoroutines, info)
 		}

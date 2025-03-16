@@ -81,10 +81,6 @@ func createTablesAndIndexes(db *sql.DB) error {
 		return fmt.Errorf("can't create ParentId index: %w", err)
 	}
 
-	if _, err := db.Exec(SQLCreateGoroutineGIDIndex); err != nil {
-		return fmt.Errorf("can't create goroutine GID index: %w", err)
-	}
-
 	return nil
 }
 
