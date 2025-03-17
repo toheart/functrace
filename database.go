@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 	"time"
 
 	"github.com/sourcegraph/conc"
@@ -51,7 +51,7 @@ func findAvailableDBName() (string, error) {
 	if err != nil {
 		execName = "default"
 	}
-	execName = execName[strings.LastIndex(execName, "/")+1:]
+	execName = filepath.Base(execName)
 	currentTime := time.Now().Format("20060102150405")
 	dbName := fmt.Sprintf(DBFileNameFormat, execName, currentTime)
 
