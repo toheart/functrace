@@ -98,6 +98,8 @@ func (t *TraceInstance) processDBUpdate() {
 	}
 
 	wg.Wait()
+
+	t.dbClosed <- struct{}{}
 }
 
 // processChannel 处理单个通道的数据库操作

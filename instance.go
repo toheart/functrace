@@ -30,9 +30,12 @@ type TraceInstance struct {
 	log              *slog.Logger
 	db               *sql.DB                   // 数据库连接
 	closed           bool                      // 标志位表示是否已关闭
+	dbClosed         chan struct{}             // 标志位表示数据库是否已关闭
 	updateChans      []chan dbOperation        // 多个通道用于异步数据库操作
 	chanCount        int                       // 通道数量
 	GoroutineRunning map[uint64]*GoroutineInfo // 管理运行中的goroutine, key为gid, value为数据库id
+
+	IgnoreNames map[string]struct{}
 }
 
 // NewTraceInstance 初始化并返回 TraceInstance 的单例实例
@@ -67,6 +70,17 @@ func initTraceInstance() {
 			chanCount = count
 		}
 	}
+	ignoreEnv := os.Getenv(EnvIgnoreNames)
+	var ignoreNames []string
+	if ignoreEnv != "" {
+		ignoreNames = strings.Split(ignoreEnv, ",")
+	} else {
+		ignoreNames = strings.Split(IgnoreNames, ",")
+	}
+	IgnoreNamesMap := make(map[string]struct{})
+	for _, name := range ignoreNames {
+		IgnoreNamesMap[name] = struct{}{}
+	}
 
 	// 初始化通道
 	updateChans := make([]chan dbOperation, chanCount)
@@ -82,9 +96,11 @@ func initTraceInstance() {
 		indentations:     make(map[uint64]*TraceIndent),
 		log:              initializeLogger(),
 		closed:           false,
+		dbClosed:         make(chan struct{}),
 		updateChans:      updateChans,
 		chanCount:        chanCount,
 		GoroutineRunning: make(map[uint64]*GoroutineInfo),
+		IgnoreNames:      IgnoreNamesMap,
 	}
 }
 
@@ -151,6 +167,7 @@ func (t *TraceInstance) Close() error {
 	for _, updateChan := range t.updateChans {
 		close(updateChan)
 	}
+	<-t.dbClosed
 
 	// 关闭数据库连接
 	if t.db != nil {

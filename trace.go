@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/davecgh/go-spew/spew"
 )
 
 // Trace 是一个装饰器，用于跟踪函数的进入和退出
@@ -27,7 +29,6 @@ func Trace(params []interface{}) func() {
 	gid := getGID()
 	fn := runtime.FuncForPC(pc)
 	name := fn.Name()
-
 	// 检查是否应该跳过此函数
 	if skipFunction(name) {
 		return func() {}
@@ -180,20 +181,9 @@ func getGID() uint64 {
 
 // skipFunction 检查是否应该跳过跟踪某个函数
 func skipFunction(name string) bool {
-	ignoreEnv := os.Getenv(EnvIgnoreNames)
-	var ignoreNames []string
-	if ignoreEnv != "" {
-		ignoreNames = strings.Split(ignoreEnv, ",")
-	} else {
-		ignoreNames = strings.Split(IgnoreNames, ",")
-	}
-
-	for _, ignoreName := range ignoreNames {
-		if strings.Contains(strings.ToLower(name), ignoreName) {
-			return true
-		}
-	}
-	return false
+	name = strings.ToLower(name)
+	_, ok := singleTrace.IgnoreNames[name]
+	return ok
 }
 
 // formatDuration 格式化持续时间，使其更易读
@@ -390,4 +380,25 @@ func (t *TraceInstance) checkAndFinishGoroutines() {
 	t.log.Info("goroutine monitor check completed",
 		"running count", len(runningGoroutines),
 		"finished count", len(finishedGoroutines))
+}
+
+// prepareParamsOutput 准备参数输出
+func prepareParamsOutput(params []interface{}) []*TraceParams {
+	var traceParams []*TraceParams
+
+	// 如果没有参数，返回一个特殊标记
+	if len(params) == 0 {
+		return nil
+	}
+
+	// 处理参数
+	for i, item := range params {
+		traceParams = append(traceParams, &TraceParams{
+			Pos: i,
+			// Param: formatParam(i, item),
+			Param: spew.Sdump(item),
+		})
+	}
+
+	return traceParams
 }
