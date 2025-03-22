@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -36,12 +37,12 @@ type TraceInstance struct {
 	GoroutineRunning map[uint64]*GoroutineInfo // 管理运行中的goroutine, key为gid, value为数据库id
 
 	IgnoreNames map[string]struct{}
+	spewConfig  *spew.ConfigState
 }
 
 // NewTraceInstance 初始化并返回 TraceInstance 的单例实例
 func NewTraceInstance() *TraceInstance {
 	once.Do(func() {
-		// 初始化 TraceInstance
 		initTraceInstance()
 		singleTrace.log.Info("init TraceInstance success")
 		// 初始化数据库
@@ -50,6 +51,7 @@ func NewTraceInstance() *TraceInstance {
 			return
 		}
 		singleTrace.log.Info("init database success")
+		singleTrace.log.Info("spew config", "config", spew.Config)
 
 		// 启动异步处理数据库操作的协程
 		go singleTrace.processDBUpdate()
@@ -101,6 +103,14 @@ func initTraceInstance() {
 		chanCount:        chanCount,
 		GoroutineRunning: make(map[uint64]*GoroutineInfo),
 		IgnoreNames:      IgnoreNamesMap,
+		spewConfig: &spew.ConfigState{
+			Indent:                  "  ",
+			MaxDepth:                5,
+			DisableMethods:          true,
+			DisableCapacities:       true,
+			DisablePointerAddresses: true,
+			DisablePointerMethods:   true,
+		},
 	}
 }
 

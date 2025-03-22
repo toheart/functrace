@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
 // Trace 是一个装饰器，用于跟踪函数的进入和退出
@@ -396,7 +394,7 @@ func prepareParamsOutput(params []interface{}) []*TraceParams {
 		traceParams = append(traceParams, &TraceParams{
 			Pos: i,
 			// Param: formatParam(i, item),
-			Param: spew.Sdump(item),
+			Param: singleTrace.spewConfig.Sdump(item),
 		})
 	}
 

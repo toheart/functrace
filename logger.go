@@ -19,6 +19,11 @@ func (t *TraceInstance) logFunctionEntry(id uint64, name string, indent int, par
 		logBuilder.WriteString(fmt.Sprintf(" (parentId: %d)", parentId))
 	}
 
+	// 限制paramsJSON输出为120个字符
+	if len(paramsJSON) > 120 {
+		paramsJSON = paramsJSON[:120] + "..."
+	}
+
 	// 记录日志
 	t.log.Info(logBuilder.String(),
 		"goroutine", id,
