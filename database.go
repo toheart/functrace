@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/sourcegraph/conc"
 	_ "modernc.org/sqlite" // 引入 sqlite3 驱动
 )
@@ -21,7 +22,7 @@ func initDatabase() error {
 	if err != nil {
 		return fmt.Errorf("can't find available db name: %w", err)
 	}
-	singleTrace.log.Info("found dbName", "dbName", dbName)
+	singleTrace.log.WithFields(logrus.Fields{"dbName": dbName}).Info("found dbName")
 
 	// 打开数据库连接
 	singleTrace.db, err = sql.Open("sqlite", fmt.Sprintf("file:%s?cache=shared&_journal_mode=WAL", dbName))
@@ -109,31 +110,35 @@ func (t *TraceInstance) processChannel(chanIndex int) {
 	}
 }
 
-// executeDBOperation 执行单个数据库操作
+// executeDBOperation 执行数据库操作
 func (t *TraceInstance) executeDBOperation(op dbOperation) {
-	var result sql.Result
-	var err error
-
-	// 根据操作类型执行不同的数据库操作
 	switch op.opType {
 	case OpTypeInsert:
-		result, err = t.db.Exec(op.query, op.args...)
+		// 执行插入操作
+		result, err := t.db.Exec(op.query, op.args...)
 		if err != nil {
-			t.log.Error("can't insert data", "error", err, "query", op.query)
+			t.log.WithFields(logrus.Fields{
+				"error": err,
+				"query": op.query,
+			}).Error("can't insert data")
 			return
 		}
-		t.log.Info("insert data success", "result", result)
+		t.log.WithFields(logrus.Fields{"result": result}).Info("insert data success")
 
 	case OpTypeUpdate:
-		result, err = t.db.Exec(op.query, op.args...)
+		// 执行更新操作
+		result, err := t.db.Exec(op.query, op.args...)
 		if err != nil {
-			t.log.Error("can't update data", "error", err, "query", op.query)
+			t.log.WithFields(logrus.Fields{
+				"error": err,
+				"query": op.query,
+			}).Error("can't update data")
 			return
 		}
-		t.log.Info("update data success", "result", result)
+		t.log.WithFields(logrus.Fields{"result": result}).Info("update data success")
 
 	default:
-		t.log.Error("unknown operation type", "opType", op.opType)
+		t.log.WithFields(logrus.Fields{"opType": op.opType}).Error("unknown operation type")
 	}
 }
 

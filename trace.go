@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 // Trace 是一个装饰器，用于跟踪函数的进入和退出
@@ -19,7 +21,7 @@ func Trace(params []interface{}) func() {
 	// 获取调用者信息
 	pc, _, _, ok := runtime.Caller(1)
 	if !ok {
-		instance.log.Error("can't find caller")
+		instance.log.WithFields(nil).Error("can't find caller")
 		return func() {}
 	}
 
@@ -58,7 +60,7 @@ func (t *TraceInstance) enterTrace(id uint64, name string, params []interface{})
 	traceParams := prepareParamsOutput(params)
 	paramsJSON, err := json.Marshal(traceParams)
 	if err != nil {
-		t.log.Error("can't convert params to json", "error", err)
+		t.log.WithFields(logrus.Fields{"error": err}).Error("can't convert params to json")
 		return traceId, startTime
 	}
 
@@ -146,7 +148,7 @@ func (t *TraceInstance) updateTraceIndent(id uint64) int {
 	// 获取 TraceIndent
 	traceIndent, exists := t.indentations[id]
 	if !exists {
-		t.log.Error("can't find TraceIndent for goroutine", "goroutine", id)
+		t.log.WithFields(logrus.Fields{"goroutine": id}).Error("can't find TraceIndent for goroutine")
 		return -1
 	}
 
@@ -229,11 +231,11 @@ func (t *TraceInstance) initGoroutineIfNeeded(gid uint64, name string) (info *Go
 		// 执行插入操作
 		_, err := t.db.Exec(SQLInsertGoroutine, id, gid, createTimeStr, 0, funcName)
 		if err != nil {
-			t.log.Error("failed to insert goroutine trace", "error", err)
+			t.log.WithFields(logrus.Fields{"error": err}).Error("failed to insert goroutine trace")
 			return
 		}
 
-		t.log.Info("initialized goroutine trace", "goroutine", id, "initFunc", funcName)
+		t.log.WithFields(logrus.Fields{"goroutine": id, "initFunc": funcName}).Info("initialized goroutine trace")
 	}(id, gid, name, start.Format(TimeFormat))
 
 	return info, true
@@ -253,11 +255,11 @@ func (t *TraceInstance) GoroutineFinished(info *GoroutineInfo) {
 
 // finishGoroutineTrace 完成对goroutine的跟踪
 func (t *TraceInstance) finishGoroutineTrace(info *GoroutineInfo) {
-	t.log.Info("finishing goroutine trace", "id", info.ID)
+	t.log.WithFields(logrus.Fields{"id": info.ID}).Info("finishing goroutine trace")
 	// 获取goroutine创建时间
 	createTimeStr, err := t.getGoroutineCreateTime(info.ID)
 	if err != nil {
-		t.log.Error("failed to get goroutine create time", "error", err)
+		t.log.WithFields(logrus.Fields{"error": err}).Error("failed to get goroutine create time")
 		// 在无法获取创建时间的情况下，使用根函数执行时间作为总时间
 		t.updateGoroutineTimeCost(info.ID, time.Since(currentNow).String(), 1)
 		return
@@ -266,7 +268,7 @@ func (t *TraceInstance) finishGoroutineTrace(info *GoroutineInfo) {
 	// 解析创建时间
 	createTime, err := time.Parse(TimeFormat, createTimeStr)
 	if err != nil {
-		t.log.Error("failed to parse create time", "error", err)
+		t.log.WithFields(logrus.Fields{"error": err}).Error("failed to parse create time")
 		// 在解析失败的情况下，使用根函数执行时间作为总时间
 		t.updateGoroutineTimeCost(info.ID, time.Since(currentNow).String(), 1)
 		return
@@ -274,7 +276,7 @@ func (t *TraceInstance) finishGoroutineTrace(info *GoroutineInfo) {
 	// 获取goroutine最后更新时间
 	lastTime, err := time.Parse(TimeFormat, info.LastUpdateTime)
 	if err != nil {
-		t.log.Error("failed to parse last update time", "error", err)
+		t.log.WithFields(logrus.Fields{"error": err}).Error("failed to parse last update time")
 		return
 	}
 	// 计算总运行时间（当前时间 - 创建时间）
@@ -285,10 +287,7 @@ func (t *TraceInstance) finishGoroutineTrace(info *GoroutineInfo) {
 
 	// 从映射中移除
 	t.deleteGoroutineRunning(info.OriginGID)
-	t.log.Info("completed goroutine trace",
-		"goroutine identifier", info.OriginGID,
-		"database id", info.ID,
-		"total execution time", totalExecTime.String())
+	t.log.WithFields(logrus.Fields{"goroutine identifier": info.OriginGID, "database id": info.ID, "total execution time": totalExecTime.String()}).Info("completed goroutine trace")
 }
 
 // getGoroutineCreateTime 获取goroutine创建时间
@@ -300,10 +299,10 @@ func (t *TraceInstance) getGoroutineCreateTime(id uint64) (string, error) {
 
 // updateGoroutineTimeCost 更新goroutine时间成本
 func (t *TraceInstance) updateGoroutineTimeCost(id uint64, timeCostStr string, isFinished int) {
-	t.log.Info("updating goroutine trace with time cost", "id", id, "timeCost", timeCostStr, "isFinished", isFinished)
+	t.log.WithFields(logrus.Fields{"id": id, "timeCost": timeCostStr, "isFinished": isFinished}).Info("updating goroutine trace with time cost")
 	_, err := t.db.Exec(SQLUpdateGoroutineTimeCost, timeCostStr, isFinished, id)
 	if err != nil {
-		t.log.Error("failed to update goroutine trace with time cost", "error", err)
+		t.log.WithFields(logrus.Fields{"error": err}).Error("failed to update goroutine trace with time cost")
 	}
 }
 

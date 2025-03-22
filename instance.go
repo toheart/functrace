@@ -2,7 +2,6 @@ package functrace
 
 import (
 	"database/sql"
-	"log/slog"
 	"os"
 	"runtime"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
+	"github.com/sirupsen/logrus"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -28,7 +28,7 @@ type TraceInstance struct {
 	globalId         atomic.Int64
 	gGroutineId      atomic.Uint64
 	indentations     map[uint64]*TraceIndent
-	log              *slog.Logger
+	log              *logrus.Logger
 	db               *sql.DB                   // 数据库连接
 	closed           bool                      // 标志位表示是否已关闭
 	dbClosed         chan struct{}             // 标志位表示数据库是否已关闭
@@ -47,11 +47,11 @@ func NewTraceInstance() *TraceInstance {
 		singleTrace.log.Info("init TraceInstance success")
 		// 初始化数据库
 		if err := initDatabase(); err != nil {
-			singleTrace.log.Error("init database failed", "error", err)
+			singleTrace.log.WithFields(logrus.Fields{"error": err}).Error("init database failed")
 			return
 		}
 		singleTrace.log.Info("init database success")
-		singleTrace.log.Info("spew config", "config", spew.Config)
+		singleTrace.log.WithFields(logrus.Fields{"config": spew.Config}).Info("spew config")
 
 		// 启动异步处理数据库操作的协程
 		go singleTrace.processDBUpdate()
@@ -115,12 +115,29 @@ func initTraceInstance() {
 }
 
 // initializeLogger 初始化日志记录器
-func initializeLogger() *slog.Logger {
-	log := slog.New(slog.NewTextHandler(&lumberjack.Logger{
+func initializeLogger() *logrus.Logger {
+	// 创建新的logrus实例
+	log := logrus.New()
+
+	// 配置日志格式为文本格式
+	log.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp:    true,
+		TimestampFormat:  "2006-01-02 15:04:05.000",
+		DisableColors:    false,
+		DisableTimestamp: false,
+	})
+
+	// 配置日志输出到lumberjack用于日志轮转
+	logWriter := &lumberjack.Logger{
 		Filename:  LogFileName,
 		LocalTime: true,
 		Compress:  true,
-	}, nil))
+	}
+	log.SetOutput(logWriter)
+
+	// 设置日志级别
+	log.SetLevel(logrus.InfoLevel)
+
 	return log
 }
 
