@@ -2,7 +2,6 @@ package functrace
 
 import (
 	"database/sql"
-	"log/slog"
 	"os"
 	"runtime"
 	"strconv"
@@ -11,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/davecgh/go-spew/spew"
+	"github.com/sirupsen/logrus"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -27,26 +28,30 @@ type TraceInstance struct {
 	globalId         atomic.Int64
 	gGroutineId      atomic.Uint64
 	indentations     map[uint64]*TraceIndent
-	log              *slog.Logger
+	log              *logrus.Logger
 	db               *sql.DB                   // 数据库连接
 	closed           bool                      // 标志位表示是否已关闭
+	dbClosed         chan struct{}             // 标志位表示数据库是否已关闭
 	updateChans      []chan dbOperation        // 多个通道用于异步数据库操作
 	chanCount        int                       // 通道数量
 	GoroutineRunning map[uint64]*GoroutineInfo // 管理运行中的goroutine, key为gid, value为数据库id
+
+	IgnoreNames map[string]struct{}
+	spewConfig  *spew.ConfigState
 }
 
 // NewTraceInstance 初始化并返回 TraceInstance 的单例实例
 func NewTraceInstance() *TraceInstance {
 	once.Do(func() {
-		// 初始化 TraceInstance
 		initTraceInstance()
 		singleTrace.log.Info("init TraceInstance success")
 		// 初始化数据库
 		if err := initDatabase(); err != nil {
-			singleTrace.log.Error("init database failed", "error", err)
+			singleTrace.log.WithFields(logrus.Fields{"error": err}).Error("init database failed")
 			return
 		}
 		singleTrace.log.Info("init database success")
+		singleTrace.log.WithFields(logrus.Fields{"config": spew.Config}).Info("spew config")
 
 		// 启动异步处理数据库操作的协程
 		go singleTrace.processDBUpdate()
@@ -67,6 +72,17 @@ func initTraceInstance() {
 			chanCount = count
 		}
 	}
+	ignoreEnv := os.Getenv(EnvIgnoreNames)
+	var ignoreNames []string
+	if ignoreEnv != "" {
+		ignoreNames = strings.Split(ignoreEnv, ",")
+	} else {
+		ignoreNames = strings.Split(IgnoreNames, ",")
+	}
+	IgnoreNamesMap := make(map[string]struct{})
+	for _, name := range ignoreNames {
+		IgnoreNamesMap[name] = struct{}{}
+	}
 
 	// 初始化通道
 	updateChans := make([]chan dbOperation, chanCount)
@@ -82,19 +98,46 @@ func initTraceInstance() {
 		indentations:     make(map[uint64]*TraceIndent),
 		log:              initializeLogger(),
 		closed:           false,
+		dbClosed:         make(chan struct{}),
 		updateChans:      updateChans,
 		chanCount:        chanCount,
 		GoroutineRunning: make(map[uint64]*GoroutineInfo),
+		IgnoreNames:      IgnoreNamesMap,
+		spewConfig: &spew.ConfigState{
+			Indent:                  "  ",
+			MaxDepth:                5,
+			DisableMethods:          true,
+			DisableCapacities:       true,
+			DisablePointerAddresses: true,
+			DisablePointerMethods:   true,
+		},
 	}
 }
 
 // initializeLogger 初始化日志记录器
-func initializeLogger() *slog.Logger {
-	log := slog.New(slog.NewTextHandler(&lumberjack.Logger{
+func initializeLogger() *logrus.Logger {
+	// 创建新的logrus实例
+	log := logrus.New()
+
+	// 配置日志格式为文本格式
+	log.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp:    true,
+		TimestampFormat:  "2006-01-02 15:04:05.000",
+		DisableColors:    false,
+		DisableTimestamp: false,
+	})
+
+	// 配置日志输出到lumberjack用于日志轮转
+	logWriter := &lumberjack.Logger{
 		Filename:  LogFileName,
 		LocalTime: true,
 		Compress:  true,
-	}, nil))
+	}
+	log.SetOutput(logWriter)
+
+	// 设置日志级别
+	log.SetLevel(logrus.InfoLevel)
+
 	return log
 }
 
@@ -151,6 +194,7 @@ func (t *TraceInstance) Close() error {
 	for _, updateChan := range t.updateChans {
 		close(updateChan)
 	}
+	<-t.dbClosed
 
 	// 关闭数据库连接
 	if t.db != nil {

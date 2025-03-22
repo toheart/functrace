@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 // logFunctionEntry 记录函数进入的日志
@@ -19,11 +21,17 @@ func (t *TraceInstance) logFunctionEntry(id uint64, name string, indent int, par
 		logBuilder.WriteString(fmt.Sprintf(" (parentId: %d)", parentId))
 	}
 
+	// 限制paramsJSON输出为120个字符
+	if len(paramsJSON) > 120 {
+		paramsJSON = paramsJSON[:120] + "..."
+	}
+
 	// 记录日志
-	t.log.Info(logBuilder.String(),
-		"goroutine", id,
-		"params", paramsJSON,
-		"time", startTime.Format(TimeFormatWithMillis))
+	t.log.WithFields(logrus.Fields{
+		"goroutine": id,
+		"params":    paramsJSON,
+		"time":      startTime.Format(TimeFormatWithMillis),
+	}).Info(logBuilder.String())
 }
 
 // logFunctionExit 记录函数退出的日志
@@ -36,10 +44,11 @@ func (t *TraceInstance) logFunctionExit(id uint64, name string, indent int, dura
 	logBuilder.WriteString(fmt.Sprintf("%s <- %s", indents, name))
 
 	// 记录日志
-	t.log.Info(logBuilder.String(),
-		"goroutine", id,
-		"duration", durationStr,
-		"time", time.Now().Format(TimeFormatWithMillis))
+	t.log.WithFields(logrus.Fields{
+		"goroutine": id,
+		"duration":  durationStr,
+		"time":      time.Now().Format(TimeFormatWithMillis),
+	}).Info(logBuilder.String())
 }
 
 // generateIndentString 生成缩进字符串
