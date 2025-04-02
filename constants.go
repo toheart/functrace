@@ -11,11 +11,13 @@ const (
 	EnvTraceChannelCount        = "TRACE_CHANNEL_COUNT"
 	EnvIgnoreNames              = "IGNORE_NAMES"
 	EnvGoroutineMonitorInterval = "GOROUTINE_MONITOR_INTERVAL" // 监控goroutine的时间间隔(秒)
+	EnvMaxDepth                 = "MAX_DEPTH"
 
 	// 默认配置值
 	DefaultChannelCount      = 10 // 通道数量
 	DefaultChannelBufferSize = 20 // 通道缓冲区大小
 	DefaultMonitorInterval   = 60 // 默认监控间隔，单位秒
+	DefaultMaxDepth          = 5  // 默认最大深度
 
 	// 日志文件配置
 	LogFileName = "./trace.log"

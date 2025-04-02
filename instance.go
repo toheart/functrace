@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/sirupsen/logrus"
+	"github.com/toheart/functrace/spew"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -72,6 +72,12 @@ func initTraceInstance() {
 			chanCount = count
 		}
 	}
+	maxDepth := DefaultMaxDepth
+	if maxDepthStr := os.Getenv(EnvMaxDepth); maxDepthStr != "" {
+		if count, err := strconv.Atoi(maxDepthStr); err == nil && count > 0 {
+			maxDepth = count
+		}
+	}
 	ignoreEnv := os.Getenv(EnvIgnoreNames)
 	var ignoreNames []string
 	if ignoreEnv != "" {
@@ -104,12 +110,11 @@ func initTraceInstance() {
 		GoroutineRunning: make(map[uint64]*GoroutineInfo),
 		IgnoreNames:      IgnoreNamesMap,
 		spewConfig: &spew.ConfigState{
-			Indent:                  "  ",
-			MaxDepth:                5,
-			DisableMethods:          true,
-			DisableCapacities:       true,
-			DisablePointerAddresses: true,
-			DisablePointerMethods:   true,
+			MaxDepth:          maxDepth,
+			DisableMethods:    true,
+			DisableCapacities: true,
+			EnableJSONOutput:  true,
+			SkipNilValues:     true,
 		},
 	}
 }
