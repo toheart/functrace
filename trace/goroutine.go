@@ -86,7 +86,7 @@ func (t *TraceInstance) finishGoroutineTrace(info *GoroutineInfo) {
 	// 获取协程信息
 	goroutine, err := repositoryFactory.GetGoroutineRepository().FindGoroutineByID(int64(info.ID))
 	if err != nil {
-		t.log.WithFields(logrus.Fields{"error": err}).Error("获取协程信息失败")
+		t.log.WithFields(logrus.Fields{"error": err}).Error("get goroutine info failed")
 		// 在失败的情况下，使用默认的时间成本
 		t.sendFinishedGoroutineOp(goroutine, time.Since(currentNow).String())
 		return
@@ -95,21 +95,14 @@ func (t *TraceInstance) finishGoroutineTrace(info *GoroutineInfo) {
 	// 解析创建时间
 	createTime, err := time.Parse(TimeFormat, goroutine.CreateTime)
 	if err != nil {
-		t.log.WithFields(logrus.Fields{"error": err}).Error("解析创建时间失败")
+		t.log.WithFields(logrus.Fields{"error": err}).Error("parse create time failed")
 		// 在解析失败的情况下，使用默认的时间成本
 		t.sendFinishedGoroutineOp(goroutine, time.Since(currentNow).String())
 		return
 	}
 
-	// 获取协程最后更新时间
-	lastTime, err := time.Parse(TimeFormat, info.LastUpdateTime)
-	if err != nil {
-		t.log.WithFields(logrus.Fields{"error": err}).Error("解析最后更新时间失败")
-		return
-	}
-
 	// 计算总运行时间
-	totalExecTime := lastTime.Sub(createTime)
+	totalExecTime := time.Since(createTime)
 
 	// 更新协程数据
 	t.sendFinishedGoroutineOp(goroutine, totalExecTime.String())
@@ -273,7 +266,7 @@ func (t *TraceInstance) updateGoroutineTimeCost(goroutine *model.GoroutineTrace)
 			"id":         goroutine.ID,
 			"timeCost":   goroutine.TimeCost,
 			"isFinished": goroutine.IsFinished,
-		}).Error("更新协程时间成本失败")
+		}).Error("Failed to update goroutine time cost")
 	}
 }
 

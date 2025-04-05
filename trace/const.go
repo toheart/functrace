@@ -3,6 +3,7 @@ package trace
 import (
 	"fmt"
 	"regexp"
+	"time"
 )
 
 // 封装 trace 包的常量
@@ -29,7 +30,7 @@ const (
 	// 默认最大深度
 	DefaultMaxDepth = 3
 	// 时间格式
-	TimeFormat = "2006-01-02 15:04:05.000"
+	TimeFormat = time.RFC3339Nano
 )
 
 // 方法类型常量

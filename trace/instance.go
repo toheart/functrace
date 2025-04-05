@@ -66,7 +66,8 @@ type TraceInstance struct {
 	GoroutineRunning map[uint64]*GoroutineInfo // 管理运行中的goroutine, key为gid, value为数据库id
 	paramCache       map[string]*receiverInfo  // 管理参数缓存, key为值指针地址, value为参数缓存
 
-	OpChan chan *DataOp
+	OpChan    chan *DataOp
+	dataClose chan struct{}
 
 	IgnoreNames []string
 	spewConfig  *spew.ConfigState
@@ -126,6 +127,7 @@ func initTraceInstance() {
 		paramCache:       make(map[string]*receiverInfo),
 		IgnoreNames:      ignoreNames,
 		OpChan:           make(chan *DataOp, 50),
+		dataClose:        make(chan struct{}),
 
 		spewConfig: &spew.ConfigState{
 			MaxDepth:          maxDepth + 1, // 从业务角度，需要多一层
@@ -140,17 +142,18 @@ func initTraceInstance() {
 func (t *TraceInstance) StartOpChan() {
 	p := pool.New().WithMaxGoroutines(50)
 	for op := range t.OpChan {
-		op := op
+		tmpOp := op
 		p.Go(func() {
-			switch op.OpType {
+			switch tmpOp.OpType {
 			case OpTypeInsert:
-				t.insertOp(op)
+				t.insertOp(tmpOp)
 			case OpTypeUpdate:
-				t.updateOp(op)
+				t.updateOp(tmpOp)
 			}
 		})
 	}
 	p.Wait()
+	t.dataClose <- struct{}{}
 }
 
 func (t *TraceInstance) insertOp(op *DataOp) {
@@ -249,6 +252,8 @@ func (t *TraceInstance) Close() error {
 
 	// 发送停止监控信号
 	close(stopMonitor)
+	close(t.dataClose)
+	<-t.dataClose
 
 	// 关闭数据库连接
 	return CloseDatabase()
@@ -303,7 +308,7 @@ func GetRepositoryFactory() domain.RepositoryFactory {
 func (t *TraceInstance) saveTraceData(trace *model.TraceData) {
 	_, err := repositoryFactory.GetTraceRepository().SaveTrace(trace)
 	if err != nil {
-		t.log.WithFields(logrus.Fields{"error": err, "trace": trace}).Error("")
+		t.log.WithFields(logrus.Fields{"error": err, "trace": trace}).Error("save trace data failed")
 	}
 }
 
@@ -311,11 +316,11 @@ func (t *TraceInstance) updateTraceData(trace *model.TraceData) {
 	err := repositoryFactory.GetTraceRepository().UpdateTraceTimeCost(trace.ID, trace.TimeCost)
 	if err != nil {
 		// 将数据重新插回队列
-		t.OpChan <- &DataOp{
-			OpType: OpTypeInsert,
+		t.sendOp(&DataOp{
+			OpType: OpTypeUpdate,
 			Arg:    trace,
-		}
-		t.log.WithFields(logrus.Fields{"error": err, "trace": trace}).Error("")
+		})
+		t.log.WithFields(logrus.Fields{"error": err, "trace": trace}).Error("update trace data failed")
 	}
 }
 

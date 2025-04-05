@@ -92,19 +92,18 @@ func (t *TraceInstance) ExitTrace(info *GoroutineInfo, traceData *model.TraceDat
 
 	// 计算函数执行时间
 	duration := time.Since(startTime)
-	durationStr := formatDuration(duration)
 
 	t.sendOp(&DataOp{
 		OpType: OpTypeUpdate,
 		Arg: &model.TraceData{
 			ID:         traceData.ID,
-			TimeCost:   durationStr,
+			TimeCost:   duration.String(),
 			IsFinished: 1,
 		},
 	})
 
 	// 记录日志
-	t.logFunctionExit(info.ID, traceData.Name, indent, durationStr)
+	t.logFunctionExit(info.ID, traceData.Name, indent, duration.String())
 }
 
 // updateTraceIndent 更新跟踪缩进并返回当前缩进级别
@@ -115,7 +114,7 @@ func (t *TraceInstance) updateTraceIndent(id uint64) int {
 	// 获取 TraceIndent
 	traceIndent, exists := t.indentations[id]
 	if !exists {
-		t.log.WithFields(logrus.Fields{"goroutine": id}).Error("找不到协程的 TraceIndent")
+		t.log.WithFields(logrus.Fields{"goroutine": id}).Error("can't find trace indent")
 		return -1
 	}
 
@@ -134,19 +133,6 @@ func (t *TraceInstance) updateTraceIndent(id uint64) int {
 	}
 
 	return indent
-}
-
-// formatDuration 格式化持续时间，使其更易读
-func formatDuration(d time.Duration) string {
-	if d < time.Microsecond {
-		return fmt.Sprintf("%d ns", d.Nanoseconds())
-	} else if d < time.Millisecond {
-		return fmt.Sprintf("%.2f µs", float64(d.Nanoseconds())/1000)
-	} else if d < time.Second {
-		return fmt.Sprintf("%.2f ms", float64(d.Nanoseconds())/1000000)
-	} else {
-		return fmt.Sprintf("%.2f s", d.Seconds())
-	}
 }
 
 // logFunctionEntry 记录函数进入的日志

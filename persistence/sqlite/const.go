@@ -46,7 +46,7 @@ const (
 	SQLCreateParamBaseIndex  = "CREATE INDEX IF NOT EXISTS idx_param_base ON ParamStore (baseId)"
 
 	SQLInsertTrace    = "INSERT INTO TraceData (id, name, gid, indent, paramsCount, parentId, createdAt, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-	SQLUpdateTimeCost = "UPDATE TraceData SET timeCost = ? WHERE id = ?"
+	SQLUpdateTimeCost = "UPDATE TraceData SET timeCost = ?, isFinished = ? WHERE id = ?"
 
 	// 参数表操作语句
 	SQLInsertParam = "INSERT INTO ParamStore (traceId, position, data, isReceiver, baseId) VALUES (?, ?, ?, ?, ?)"

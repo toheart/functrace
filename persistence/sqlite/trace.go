@@ -42,10 +42,19 @@ func (r *TraceRepository) SaveTrace(trace *model.TraceData) (int64, error) {
 
 // UpdateTraceTimeCost 更新跟踪时间成本
 func (r *TraceRepository) UpdateTraceTimeCost(id int64, timeCost string) error {
-	_, err := r.db.Exec(SQLUpdateTimeCost, timeCost, id)
+	result, err := r.db.Exec(SQLUpdateTimeCost, timeCost, 1, id)
 	if err != nil {
 		return fmt.Errorf("update trace time cost error: %w", err)
 	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get rows affected error: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("update trace time cost failed, no rows affected")
+	}
+
 	return nil
 }
 

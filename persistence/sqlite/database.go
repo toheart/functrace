@@ -39,7 +39,7 @@ func (s *SQLiteDatabase) Initialize() error {
 	// 创建数据库连接
 	dbPath := findAvailableDBName()
 	var err error
-	s.db, err = sql.Open("sqlite3", fmt.Sprintf("file:%s?cache=shared&_journal_mode=WAL", dbPath))
+	s.db, err = sql.Open("sqlite3", fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000", dbPath))
 	if err != nil {
 		return fmt.Errorf("can't open db: %w", err)
 	}
