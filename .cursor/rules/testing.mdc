@@ -1,0 +1,104 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 测试规范
+
+## 测试文件命名
+
+所有测试文件应以 `_test.go` 结尾，并放在与被测试文件相同的目录中。例如：
+- `trace/param.go` → `trace/param_test.go`
+- `trace/core.go` → `trace/core_test.go`
+
+## 测试函数命名
+
+测试函数应该清晰地表明其测试的功能和场景：
+
+```go
+// 基本功能测试
+func TestFunctionName(t *testing.T) {
+    // ...
+}
+
+// 特定场景测试
+func TestFunctionName_SpecificScenario(t *testing.T) {
+    // ...
+}
+
+// 表格驱动测试
+func TestFunctionName_TableDriven(t *testing.T) {
+    // ...
+}
+```
+
+## 测试辅助工具
+
+项目使用 `github.com/stretchr/testify` 包进行测试断言：
+
+```go
+import (
+    "testing"
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+)
+
+func TestSomething(t *testing.T) {
+    // assert用于非致命断言
+    result := someFunction()
+    assert.Equal(t, expected, result, "结果应该匹配预期")
+    
+    // require用于致命断言，失败时立即终止测试
+    data, err := someOtherFunction()
+    require.NoError(t, err, "不应该返回错误")
+    require.NotNil(t, data, "不应该返回nil")
+}
+```
+
+## 表格驱动测试模式
+
+优先使用表格驱动测试来测试多种情况：
+
+```go
+func TestParseParams(t *testing.T) {
+    tests := []struct {
+        name     string
+        input    []interface{}
+        expected map[string]interface{}
+        wantErr  bool
+    }{
+        {
+            name:     "正常情况",
+            input:    []interface{}{"key", "value"},
+            expected: map[string]interface{}{"key": "value"},
+            wantErr:  false,
+        },
+        {
+            name:     "无效参数",
+            input:    []interface{}{"key"},
+            expected: nil,
+            wantErr:  true,
+        },
+        // 更多测试用例...
+    }
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            result, err := ParseParams(tt.input)
+            if tt.wantErr {
+                assert.Error(t, err)
+                return
+            }
+            assert.NoError(t, err)
+            assert.Equal(t, tt.expected, result)
+        })
+    }
+}
+```
+
+## 覆盖率要求
+
+- 目标是达到至少80%的代码覆盖率
+- 优先测试核心功能和复杂逻辑
+- 使用 `go test -cover` 检查覆盖率
+

@@ -66,9 +66,9 @@ type TraceInstance struct {
 	GoroutineRunning map[uint64]*GoroutineInfo // 管理运行中的goroutine, key为gid, value为数据库id
 	paramCache       map[string]*receiverInfo  // 管理参数缓存, key为值指针地址, value为参数缓存
 
-	OpChan    chan *DataOp
-	dataClose chan struct{}
-
+	OpChan      chan *DataOp
+	dataClose   chan struct{}
+	insertMode  string // 数据库插入模式：sync 同步，async 异步
 	IgnoreNames []string
 	spewConfig  *spew.ConfigState
 }
@@ -90,8 +90,13 @@ func NewTraceInstance() *TraceInstance {
 		// 启动协程监控
 		go instance.monitorGoroutines()
 		instance.log.Info("start goroutine monitor")
-		go instance.StartOpChan()
-		instance.log.Info("start op chan")
+		// 如果是异步模式，启动OpChan处理
+		if instance.insertMode == AsyncMode {
+			go instance.StartOpChan()
+			instance.log.Info("start op chan with async mode")
+		} else {
+			instance.log.Info("running in sync mode, op chan not started")
+		}
 	})
 	return instance
 }
@@ -118,6 +123,12 @@ func initTraceInstance() {
 		}
 	}
 
+	// 从环境变量获取数据库插入模式，默认为同步
+	insertMode := SyncMode
+	if modeStr := os.Getenv(EnvDBInsertMode); modeStr == AsyncMode {
+		insertMode = AsyncMode
+	}
+
 	// 创建 TraceInstance
 	instance = &TraceInstance{
 		indentations:     make(map[uint64]*TraceIndent),
@@ -128,6 +139,7 @@ func initTraceInstance() {
 		IgnoreNames:      ignoreNames,
 		OpChan:           make(chan *DataOp, 50),
 		dataClose:        make(chan struct{}),
+		insertMode:       insertMode,
 
 		spewConfig: &spew.ConfigState{
 			MaxDepth:          maxDepth + 1, // 从业务角度，需要多一层
@@ -173,6 +185,16 @@ func (t *TraceInstance) updateOp(op *DataOp) {
 		t.updateTraceData(op.Arg.(*model.TraceData))
 	case *model.GoroutineTrace:
 		t.updateGoroutineTimeCost(op.Arg.(*model.GoroutineTrace))
+	}
+}
+
+// executeOp 直接执行数据库操作
+func (t *TraceInstance) executeOp(op *DataOp) {
+	switch op.OpType {
+	case OpTypeInsert:
+		t.insertOp(op)
+	case OpTypeUpdate:
+		t.updateOp(op)
 	}
 }
 
@@ -252,8 +274,12 @@ func (t *TraceInstance) Close() error {
 
 	// 发送停止监控信号
 	close(stopMonitor)
-	close(t.dataClose)
-	<-t.dataClose
+
+	// 如果是异步模式，关闭OpChan
+	if t.insertMode == AsyncMode {
+		close(t.OpChan)
+		<-t.dataClose
+	}
 
 	// 关闭数据库连接
 	return CloseDatabase()
@@ -306,6 +332,7 @@ func GetRepositoryFactory() domain.RepositoryFactory {
 }
 
 func (t *TraceInstance) saveTraceData(trace *model.TraceData) {
+	t.log.WithFields(logrus.Fields{"trace": trace}).Info("save trace data")
 	_, err := repositoryFactory.GetTraceRepository().SaveTrace(trace)
 	if err != nil {
 		t.log.WithFields(logrus.Fields{"error": err, "trace": trace}).Error("save trace data failed")
@@ -320,10 +347,15 @@ func (t *TraceInstance) updateTraceData(trace *model.TraceData) {
 			OpType: OpTypeUpdate,
 			Arg:    trace,
 		})
-		t.log.WithFields(logrus.Fields{"error": err, "trace": trace}).Error("update trace data failed")
+		t.log.WithFields(logrus.Fields{"error": err, "trace": trace}).Error("update trace data failed, requeue")
 	}
 }
 
 func (t *TraceInstance) sendOp(op *DataOp) {
-	t.OpChan <- op
+	// 根据插入模式决定是同步执行还是通过通道异步执行
+	if t.insertMode == SyncMode {
+		t.executeOp(op)
+	} else {
+		t.OpChan <- op
+	}
 }

@@ -101,6 +101,7 @@ traceID, err := traceRepo.SaveTrace(traceData)
 - `TRACE_CHANNEL_COUNT`: 设置异步数据库操作的通道数量，默认为 10。
 - `IGNORE_NAMES`: 定义默认忽略的函数名称关键字，多个名称用逗号分隔。
 - `GOROUTINE_MONITOR_INTERVAL`: 设置监控 goroutine 运行时间的间隔，单位为秒，默认为 60 秒。
+- `ENV_DB_INSERT_MODE`: 设置数据库插入模式，支持 "sync"(同步模式，默认) 和 "async"(异步模式)。
 
 ## 使用方法
 

@@ -1,0 +1,75 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# 代码模式与最佳实践
+
+## 1. 跟踪函数使用模式
+
+### 基本用法
+```go
+func YourFunction() {
+    defer functrace.Trace(nil)()
+    
+    // 你的代码...
+}
+```
+
+### 带参数的跟踪
+```go
+func YourFunction(name string, age int) {
+    defer functrace.Trace([]interface{}{"name", name, "age", age})()
+    
+    // 你的代码...
+}
+```
+
+## 2. 错误处理模式
+
+```go
+result, err := someFunction()
+if err != nil {
+    return fmt.Errorf("调用someFunction失败: %w", err)
+}
+```
+
+## 3. 仓储使用模式
+
+```go
+repo, err := persistence.factory.CreateRepository(config)
+if err != nil {
+    return nil, fmt.Errorf("创建仓储失败: %w", err)
+}
+
+// 使用仓储
+defer repo.Close()
+```
+
+## 4. 日志记录模式
+
+```go
+logger := functrace.GetLogger()
+
+// 信息日志
+logger.WithFields(logrus.Fields{
+    "key": value,
+}).Info("操作成功完成")
+
+// 错误日志
+logger.WithFields(logrus.Fields{
+    "error": err,
+}).Error("操作失败")
+```
+
+## 5. Goroutine处理模式
+
+### 安全启动goroutine
+```go
+go func() {
+    // 确保在goroutine中也有跟踪
+    defer functrace.Trace(nil)()
+    
+    // 业务逻辑...
+}()
+```

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/sirupsen/logrus"
 	"github.com/toheart/functrace/domain"
 )
@@ -39,7 +39,8 @@ func (s *SQLiteDatabase) Initialize() error {
 	// 创建数据库连接
 	dbPath := findAvailableDBName()
 	var err error
-	s.db, err = sql.Open("sqlite3", fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000", dbPath))
+	s.logger.Infof("opening db: %s", dbPath)
+	s.db, err = sql.Open("sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)", dbPath))
 	if err != nil {
 		return fmt.Errorf("can't open db: %w", err)
 	}

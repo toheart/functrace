@@ -1,0 +1,50 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# 项目结构
+
+## 1. 核心包
+
+### 主要入口
+[functrace.go](mdc:functrace.go) 是项目的主要入口点，提供了简单的API接口供用户使用。
+
+### trace包
+trace包是核心实现：
+- [trace/instance.go](mdc:trace/instance.go): 实现了跟踪实例的核心功能
+- [trace/core.go](mdc:trace/core.go): 提供基础跟踪功能
+- [trace/goroutine.go](mdc:trace/goroutine.go): 处理goroutine相关的跟踪
+- [trace/param.go](mdc:trace/param.go): 参数处理与格式化
+- [trace/const.go](mdc:trace/const.go): 定义常量和配置
+
+### domain包
+domain包定义了数据模型和仓储接口：
+- [domain/model](mdc:domain/model): 包含领域模型定义
+- [domain/repository.go](mdc:domain/repository.go): 定义仓储接口
+
+### persistence包
+persistence包提供了数据持久化实现：
+- [persistence/sqlite](mdc:persistence/sqlite): SQLite持久化实现
+- [persistence/memory](mdc:persistence/memory): 内存存储实现
+- [persistence/factory](mdc:persistence/factory): 仓储工厂实现
+
+## 2. 项目分层
+
+本项目采用简洁的分层架构：
+1. **API层**：functrace.go提供对外接口
+2. **核心层**：trace包实现核心跟踪逻辑
+3. **领域层**：domain包定义领域模型和接口
+4. **持久层**：persistence包实现数据存储
+
+## 3. 依赖关系
+
+```
+functrace (API层)
+    ↓
+trace (核心层)
+    ↓
+domain (领域层)
+    ↓
+persistence (持久层)
+

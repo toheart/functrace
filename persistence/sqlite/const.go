@@ -35,9 +35,7 @@ const (
 		position INTEGER, 
 		data TEXT, 
 		isReceiver BOOLEAN, 
-		baseId INTEGER,
-		FOREIGN KEY (traceId) REFERENCES TraceData (id),
-		FOREIGN KEY (baseId) REFERENCES ParamStore (id)
+		baseId INTEGER
 	)`
 
 	SQLCreateGIDIndex        = "CREATE INDEX IF NOT EXISTS idx_gid ON TraceData (gid)"

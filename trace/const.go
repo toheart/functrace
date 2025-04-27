@@ -25,12 +25,23 @@ const (
 
 	// EnvDBType 数据库类型环境变量
 	EnvDBType = "FUNCTRACE_DB_TYPE"
+	// 环境变量：数据库插入模式
+	// 可选值: "sync"(同步模式，默认), "async"(异步模式)
+	EnvDBInsertMode = "ENV_DB_INSERT_MODE"
 
 	IgnoreNames = "log,context,string"
 	// 默认最大深度
 	DefaultMaxDepth = 3
 	// 时间格式
 	TimeFormat = time.RFC3339Nano
+)
+
+// 数据库插入模式
+const (
+	// 异步插入模式
+	AsyncMode = "async"
+	// 同步插入模式
+	SyncMode = "sync"
 )
 
 // 方法类型常量
