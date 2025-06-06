@@ -93,7 +93,9 @@ func getUint8String(buf []uint8) string {
 	if len(buf) == 0 {
 		return ""
 	}
-
+	if len(buf) > 2048 {
+		buf = buf[:2048]
+	}
 	// 始终返回十六进制表示，不再尝试转换为字符串
 	var sb bytes.Buffer
 
@@ -226,7 +228,6 @@ func (d *dumpState) dumpSlice(v reflect.Value) {
 	// first, then fall back to trying to convert them to a uint8 slice.
 	var buf []uint8
 	doConvert := false
-	doHexDump := false
 	numEntries := v.Len()
 	if numEntries > 0 {
 		vt := v.Index(0).Type()
@@ -258,7 +259,6 @@ func (d *dumpState) dumpSlice(v reflect.Value) {
 				iface := vs.Interface()
 				if slice, ok := iface.([]uint8); ok {
 					buf = slice
-					doHexDump = true
 					break
 				}
 			}
@@ -277,64 +277,12 @@ func (d *dumpState) dumpSlice(v reflect.Value) {
 				vv := v.Index(i)
 				buf[i] = uint8(vv.Convert(uint8Type).Uint())
 			}
-			doHexDump = true
 		}
-	}
-
-	// Hexdump the entire slice as needed.
-	if doHexDump {
-		// Format the output
-		var outBuf bytes.Buffer
-		rows := len(buf) / 16
-		if len(buf)%16 != 0 {
-			rows++
-		}
-		for i := 0; i < rows; i++ {
-			start := i * 16
-			end := start + 16
-			if end > len(buf) {
-				end = len(buf)
-			}
-
-			// 写入偏移量
-			fmt.Fprintf(&outBuf, " %08x ", start)
-
-			// 写入十六进制字节
-			for j := 0; j < 16; j++ {
-				if j == 8 {
-					outBuf.WriteByte(' ')
-				}
-				if start+j < end {
-					fmt.Fprintf(&outBuf, " %02x", buf[start+j])
-				} else {
-					outBuf.WriteString("   ")
-				}
-			}
-
-			// 写入ASCII表示
-			outBuf.WriteString("  |")
-			for j := start; j < end; j++ {
-				b := buf[j]
-				if b >= 0x20 && b <= 0x7E {
-					outBuf.WriteByte(b)
-				} else {
-					outBuf.WriteByte('.')
-				}
-			}
-			outBuf.WriteString("|\n")
-		}
-		d.w.Write(outBuf.Bytes())
-
-		// 如果启用了JSON输出，将uint8数组/切片转换为字符串或十六进制表示
-		if d.cs.EnableJSONOutput {
-			d.setJSONValue(d.currentPath, getUint8String(buf))
-		}
-
-		return
 	}
 
 	// Recursively call dump for each item.
 	if d.cs.EnableJSONOutput {
+		d.setJSONValue(d.currentPath, getUint8String(buf))
 		// 为JSON输出准备数组
 		for i := 0; i < numEntries; i++ {
 			// 获取元素值
