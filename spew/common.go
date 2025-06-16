@@ -299,13 +299,19 @@ func valueSortLess(a, b reflect.Value) bool {
 	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Int:
 		return a.Int() < b.Int()
 	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint:
-		return a.Uint() < b.Uint()
+		if a.CanUint() && b.CanUint() {
+			return a.Uint() < b.Uint()
+		}
+		return a.String() < b.String()
 	case reflect.Float32, reflect.Float64:
 		return a.Float() < b.Float()
 	case reflect.String:
 		return a.String() < b.String()
 	case reflect.Uintptr:
-		return a.Uint() < b.Uint()
+		if a.CanUint() && b.CanUint() {
+			return a.Uint() < b.Uint()
+		}
+		return a.String() < b.String()
 	case reflect.Array:
 		// Compare the contents of both arrays.
 		l := a.Len()

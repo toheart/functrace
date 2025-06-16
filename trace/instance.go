@@ -143,9 +143,9 @@ func initTraceInstance() {
 
 		spewConfig: &spew.ConfigState{
 			MaxDepth:          maxDepth + 1, // 从业务角度，需要多一层
-			DisableMethods:    true,
 			DisableCapacities: true,
 			EnableJSONOutput:  true,
+			DisableMethods:    true,
 			SkipNilValues:     true,
 		},
 	}

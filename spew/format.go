@@ -242,7 +242,11 @@ func (f *formatState) format(v reflect.Value) {
 		printInt(f.fs, v.Int(), 10)
 
 	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint:
-		printUint(f.fs, v.Uint(), 10)
+		if v.IsValid() && v.CanUint() {
+			printUint(f.fs, v.Uint(), 10)
+		} else {
+			f.fs.Write(invalidAngleBytes)
+		}
 
 	case reflect.Float32:
 		printFloat(f.fs, v.Float(), 32)
@@ -349,7 +353,11 @@ func (f *formatState) format(v reflect.Value) {
 		f.fs.Write(closeBraceBytes)
 
 	case reflect.Uintptr:
-		printHexPtr(f.fs, uintptr(v.Uint()))
+		if v.IsValid() && v.CanUint() {
+			printHexPtr(f.fs, uintptr(v.Uint()))
+		} else {
+			f.fs.Write(invalidAngleBytes)
+		}
 
 	case reflect.UnsafePointer, reflect.Chan, reflect.Func:
 		printHexPtr(f.fs, v.Pointer())

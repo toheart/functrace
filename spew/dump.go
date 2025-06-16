@@ -59,6 +59,20 @@ type dumpState struct {
 	currentPath      string
 }
 
+// safeReflectCall 安全地执行反射操作，捕获可能的panic
+func (d *dumpState) safeReflectCall(fn func() interface{}, errorMsg string) (result interface{}, success bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = errorMsg
+			success = false
+		}
+	}()
+
+	result = fn()
+	success = true
+	return
+}
+
 // indent performs indentation according to the depth level and cs.Indent
 // option.
 func (d *dumpState) indent() {
@@ -229,6 +243,15 @@ func (d *dumpState) dumpSlice(v reflect.Value) {
 	var buf []uint8
 	doConvert := false
 	numEntries := v.Len()
+
+	// 限制最多显示10个元素
+	const maxElements = 10
+	var truncated bool
+	if numEntries > maxElements {
+		truncated = true
+		numEntries = maxElements
+	}
+
 	if numEntries > 0 {
 		vt := v.Index(0).Type()
 		vts := vt.String()
@@ -275,7 +298,12 @@ func (d *dumpState) dumpSlice(v reflect.Value) {
 			buf = make([]uint8, numEntries)
 			for i := 0; i < numEntries; i++ {
 				vv := v.Index(i)
-				buf[i] = uint8(vv.Convert(uint8Type).Uint())
+				converted := vv.Convert(uint8Type)
+				if converted.CanUint() {
+					buf[i] = uint8(converted.Uint())
+				} else {
+					buf[i] = 0
+				}
 			}
 		}
 	}
@@ -313,6 +341,13 @@ func (d *dumpState) dumpSlice(v reflect.Value) {
 				d.w.Write(newlineBytes)
 			}
 		}
+
+		// 如果有元素被截断，添加提示信息
+		if truncated {
+			truncatedPath := fmt.Sprintf("%s.truncated", d.currentPath)
+			totalLen := v.Len()
+			d.setJSONValue(truncatedPath, fmt.Sprintf("... 还有 %d 个元素被截断", totalLen-maxElements))
+		}
 	} else {
 		// 原始的非JSON输出逻辑
 		for i := 0; i < numEntries; i++ {
@@ -322,6 +357,13 @@ func (d *dumpState) dumpSlice(v reflect.Value) {
 			} else {
 				d.w.Write(newlineBytes)
 			}
+		}
+
+		// 如果有元素被截断，添加提示信息
+		if truncated {
+			d.indent()
+			totalLen := v.Len()
+			d.w.Write([]byte(fmt.Sprintf("... 还有 %d 个元素被截断\n", totalLen-maxElements)))
 		}
 	}
 }
@@ -456,47 +498,89 @@ func (d *dumpState) dump(v reflect.Value) {
 		}
 
 	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Int:
-		val := v.Int()
-		printInt(d.w, val, 10)
-		if d.cs.EnableJSONOutput {
-			d.setJSONValue(d.currentPath, val)
+		if v.CanInt() {
+			val := v.Int()
+			printInt(d.w, val, 10)
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, val)
+			}
+		} else {
+			d.w.Write([]byte("<invalid int value>"))
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, "invalid int value")
+			}
 		}
 
 	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint:
-		val := v.Uint()
-		printUint(d.w, val, 10)
-		if d.cs.EnableJSONOutput {
-			d.setJSONValue(d.currentPath, val)
+		if v.IsValid() && v.CanUint() {
+			val := v.Uint()
+			printUint(d.w, val, 10)
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, val)
+			}
+		} else {
+			d.w.Write([]byte("<invalid uint value>"))
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, "invalid uint value")
+			}
 		}
 
 	case reflect.Float32:
-		val := v.Float()
-		printFloat(d.w, val, 32)
-		if d.cs.EnableJSONOutput {
-			d.setJSONValue(d.currentPath, val)
+		if v.CanFloat() {
+			val := v.Float()
+			printFloat(d.w, val, 32)
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, val)
+			}
+		} else {
+			d.w.Write([]byte("<invalid float32 value>"))
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, "invalid float32 value")
+			}
 		}
 
 	case reflect.Float64:
-		val := v.Float()
-		printFloat(d.w, val, 64)
-		if d.cs.EnableJSONOutput {
-			d.setJSONValue(d.currentPath, val)
+		if v.CanFloat() {
+			val := v.Float()
+			printFloat(d.w, val, 64)
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, val)
+			}
+		} else {
+			d.w.Write([]byte("<invalid float64 value>"))
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, "invalid float64 value")
+			}
 		}
 
 	case reflect.Complex64:
-		val := v.Complex()
-		printComplex(d.w, val, 32)
-		if d.cs.EnableJSONOutput {
-			// JSON不支持复数，转换为字符串
-			d.setJSONValue(d.currentPath, fmt.Sprintf("%v", val))
+		if v.CanComplex() {
+			val := v.Complex()
+			printComplex(d.w, val, 32)
+			if d.cs.EnableJSONOutput {
+				// JSON不支持复数，转换为字符串
+				d.setJSONValue(d.currentPath, fmt.Sprintf("%v", val))
+			}
+		} else {
+			d.w.Write([]byte("<invalid complex64 value>"))
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, "invalid complex64 value")
+			}
 		}
 
 	case reflect.Complex128:
-		val := v.Complex()
-		printComplex(d.w, val, 64)
-		if d.cs.EnableJSONOutput {
-			// JSON不支持复数，转换为字符串
-			d.setJSONValue(d.currentPath, fmt.Sprintf("%v", val))
+		if v.CanComplex() {
+			val := v.Complex()
+			printComplex(d.w, val, 64)
+			if d.cs.EnableJSONOutput {
+				// JSON不支持复数，转换为字符串
+				d.setJSONValue(d.currentPath, fmt.Sprintf("%v", val))
+			}
+		} else {
+			d.w.Write([]byte("<invalid complex128 value>"))
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, "invalid complex128 value")
+			}
 		}
 
 	case reflect.Slice:
@@ -572,6 +656,16 @@ func (d *dumpState) dump(v reflect.Value) {
 			if d.cs.SortKeys {
 				sortValues(keys, d.cs)
 			}
+
+			// 限制最多显示10个键值对
+			const maxMapElements = 10
+			var mapTruncated bool
+			if len(keys) > maxMapElements {
+				mapTruncated = true
+				keys = keys[:maxMapElements]
+				numEntries = maxMapElements
+			}
+
 			for i, key := range keys {
 				d.dump(d.unpackValue(key))
 				d.w.Write(colonSpaceBytes)
@@ -586,7 +680,11 @@ func (d *dumpState) dump(v reflect.Value) {
 				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 					keyStr = fmt.Sprintf("%d", k.Int())
 				case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-					keyStr = fmt.Sprintf("%d", k.Uint())
+					if k.CanUint() {
+						keyStr = fmt.Sprintf("%d", k.Uint())
+					} else {
+						keyStr = "invalid_uint"
+					}
 				default:
 					// 对于其他类型的键，使用其字符串表示
 					if k.CanInterface() {
@@ -616,7 +714,6 @@ func (d *dumpState) dump(v reflect.Value) {
 					d.currentPath = oldPath
 					continue
 				}
-
 				// 转储值
 				d.dump(mapValue)
 
@@ -627,6 +724,19 @@ func (d *dumpState) dump(v reflect.Value) {
 					d.w.Write(commaNewlineBytes)
 				} else {
 					d.w.Write(newlineBytes)
+				}
+			}
+
+			// 如果有键值对被截断，添加提示信息
+			if mapTruncated {
+				if d.cs.EnableJSONOutput {
+					truncatedPath := fmt.Sprintf("%s.truncated", d.currentPath)
+					totalLen := v.Len()
+					d.setJSONValue(truncatedPath, fmt.Sprintf("... 还有 %d 个键值对被截断", totalLen-maxMapElements))
+				} else {
+					d.indent()
+					totalLen := v.Len()
+					d.w.Write([]byte(fmt.Sprintf("... 还有 %d 个键值对被截断\n", totalLen-maxMapElements)))
 				}
 			}
 		}
@@ -693,19 +803,33 @@ func (d *dumpState) dump(v reflect.Value) {
 		d.w.Write(closeBraceBytes)
 
 	case reflect.Uintptr:
-		val := uintptr(v.Uint())
-		printHexPtr(d.w, val)
-		if d.cs.EnableJSONOutput {
-			// 将指针转换为字符串表示
-			d.setJSONValue(d.currentPath, fmt.Sprintf("0x%x", val))
+		if v.IsValid() && v.CanUint() {
+			val := uintptr(v.Uint())
+			printHexPtr(d.w, val)
+			if d.cs.EnableJSONOutput {
+				// 将指针转换为字符串表示
+				d.setJSONValue(d.currentPath, fmt.Sprintf("0x%x", val))
+			}
+		} else {
+			d.w.Write(invalidAngleBytes)
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, "invalid uintptr")
+			}
 		}
 
 	case reflect.UnsafePointer, reflect.Chan, reflect.Func:
-		val := v.Pointer()
-		printHexPtr(d.w, val)
-		if d.cs.EnableJSONOutput {
-			// 将指针转换为字符串表示
-			d.setJSONValue(d.currentPath, fmt.Sprintf("0x%x", val))
+		if v.IsValid() {
+			val := v.Pointer()
+			printHexPtr(d.w, val)
+			if d.cs.EnableJSONOutput {
+				// 将指针转换为字符串表示
+				d.setJSONValue(d.currentPath, fmt.Sprintf("0x%x", val))
+			}
+		} else {
+			d.w.Write(invalidAngleBytes)
+			if d.cs.EnableJSONOutput {
+				d.setJSONValue(d.currentPath, "invalid pointer")
+			}
 		}
 
 	// There were not any other types at the time this code was written, but
@@ -714,11 +838,27 @@ func (d *dumpState) dump(v reflect.Value) {
 	default:
 		var val interface{}
 		if v.CanInterface() {
-			val = v.Interface()
-			fmt.Fprintf(d.w, "%v", val)
+			// 使用安全调用来防止panic
+			if result, success := d.safeReflectCall(func() interface{} {
+				return v.Interface()
+			}, "invalid interface value"); success {
+				val = result
+				fmt.Fprintf(d.w, "%v", val)
+			} else {
+				val = result
+				d.w.Write([]byte(fmt.Sprintf("<%s>", result)))
+			}
 		} else {
-			val = v.String()
-			fmt.Fprintf(d.w, "%v", val)
+			// 即使是String()也可能panic，所以也要保护
+			if result, success := d.safeReflectCall(func() interface{} {
+				return v.String()
+			}, "invalid string value"); success {
+				val = result
+				fmt.Fprintf(d.w, "%v", val)
+			} else {
+				val = result
+				d.w.Write([]byte(fmt.Sprintf("<%s>", result)))
+			}
 		}
 		if d.cs.EnableJSONOutput {
 			d.setJSONValue(d.currentPath, val)
@@ -761,8 +901,8 @@ func fdump(cs *ConfigState, w io.Writer, a ...interface{}) {
 			// 创建一个空缓冲区，后面会忽略它的内容
 			d.w = &bytes.Buffer{}
 		}
-
-		d.dump(reflect.ValueOf(arg))
+		v := reflect.ValueOf(arg)
+		d.dump(v)
 
 		// 如果启用了JSON输出，只写入JSON字符串
 		if cs.EnableJSONOutput {
