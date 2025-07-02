@@ -29,37 +29,40 @@ import (
 )
 
 var (
-	// uint8Type is a reflect.Type representing a uint8.  It is used to
-	// convert cgo types to uint8 slices for hexdumping.
+	// uint8Type是表示uint8的reflect.Type。用于将cgo类型转换为uint8切片进行十六进制转储。
 	uint8Type = reflect.TypeOf(uint8(0))
 
-	// cCharRE is a regular expression that matches a cgo char.
-	// It is used to detect character arrays to hexdump them.
+	// cCharRE是匹配cgo char的正则表达式。用于检测字符数组以进行十六进制转储。
 	cCharRE = regexp.MustCompile(`^.*\._Ctype_char$`)
 
-	// cUnsignedCharRE is a regular expression that matches a cgo unsigned
-	// char.  It is used to detect unsigned character arrays to hexdump
-	// them.
+	// cUnsignedCharRE是匹配cgo unsigned char的正则表达式。用于检测无符号字符数组以进行十六进制转储。
 	cUnsignedCharRE = regexp.MustCompile(`^.*\._Ctype_unsignedchar$`)
 
-	// cUint8tCharRE is a regular expression that matches a cgo uint8_t.
-	// It is used to detect uint8_t arrays to hexdump them.
+	// cUint8tCharRE是匹配cgo uint8_t的正则表达式。用于检测uint8_t数组以进行十六进制转储。
 	cUint8tCharRE = regexp.MustCompile(`^.*\._Ctype_uint8_t$`)
 )
 
-// dumpState contains information about the state of a dump operation.
+// dumpState包含转储操作状态的信息。
+// 用于在递归转储过程中维护状态信息，包括输出流、深度、指针引用、配置状态等。
 type dumpState struct {
-	w                io.Writer
-	depth            int
-	pointers         map[uintptr]int
-	ignoreNextType   bool
-	ignoreNextIndent bool
-	cs               *ConfigState
-	jsonOutput       string
-	currentPath      string
+	w                io.Writer       // 输出流
+	depth            int             // 当前递归深度
+	pointers         map[uintptr]int // 已处理的指针映射，用于检测循环引用
+	ignoreNextType   bool            // 是否忽略下一个类型输出
+	ignoreNextIndent bool            // 是否忽略下一个缩进
+	cs               *ConfigState    // 配置状态
+	jsonOutput       string          // JSON输出字符串
+	currentPath      string          // 当前JSON路径
 }
 
 // safeReflectCall 安全地执行反射操作，捕获可能的panic
+// 参数:
+//   - fn: 要执行的反射操作函数
+//   - errorMsg: 发生panic时返回的错误消息
+//
+// 返回值:
+//   - result: 函数执行结果或错误消息
+//   - success: 操作是否成功
 func (d *dumpState) safeReflectCall(fn func() interface{}, errorMsg string) (result interface{}, success bool) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -73,8 +76,8 @@ func (d *dumpState) safeReflectCall(fn func() interface{}, errorMsg string) (res
 	return
 }
 
-// indent performs indentation according to the depth level and cs.Indent
-// option.
+// indent 根据深度级别和cs.Indent选项执行缩进。
+// 如果ignoreNextIndent为true，则跳过此次缩进并重置该标志。
 func (d *dumpState) indent() {
 	if d.ignoreNextIndent {
 		d.ignoreNextIndent = false
@@ -84,6 +87,11 @@ func (d *dumpState) indent() {
 }
 
 // setJSONValue 将值添加到JSON输出中
+// 参数:
+//   - path: JSON路径
+//   - value: 要设置的值
+//
+// 功能: 使用sjson库将键值对添加到JSON输出字符串中，如果SkipNilValues为true且值为nil则跳过
 func (d *dumpState) setJSONValue(path string, value interface{}) {
 	// 如果SkipNilValues为true且值为nil，则跳过设置
 	if d.cs.SkipNilValues && value == nil {
@@ -102,7 +110,14 @@ func (d *dumpState) setJSONValue(path string, value interface{}) {
 	}
 }
 
-// 获取uint8数组或切片的字符串表示
+// getUint8String 获取uint8数组或切片的字符串表示
+// 参数:
+//   - buf: uint8数组或切片
+//
+// 返回值:
+//   - string: 十六进制格式的字符串表示
+//
+// 功能: 将字节数组转换为十六进制字符串，每行显示16个字节，最多显示2048个字节
 func getUint8String(buf []uint8) string {
 	if len(buf) == 0 {
 		return ""
@@ -145,9 +160,14 @@ func getUint8String(buf []uint8) string {
 	return sb.String()
 }
 
-// unpackValue returns values inside of non-nil interfaces when possible.
-// This is useful for data types like structs, arrays, slices, and maps which
-// can contain varying types packed inside an interface.
+// unpackValue 在可能的情况下返回非nil接口内部的值。
+// 参数:
+//   - v: 要解包的reflect.Value
+//
+// 返回值:
+//   - reflect.Value: 解包后的值
+//
+// 功能: 对于包含不同类型的接口（如structs、arrays、slices、maps），提取其实际值
 func (d *dumpState) unpackValue(v reflect.Value) reflect.Value {
 	if v.Kind() == reflect.Interface && !v.IsNil() {
 		v = v.Elem()
@@ -155,7 +175,11 @@ func (d *dumpState) unpackValue(v reflect.Value) reflect.Value {
 	return v
 }
 
-// dumpPtr handles formatting of pointers by indirecting them as necessary.
+// dumpPtr 通过必要的间接引用来处理指针的格式化。
+// 参数:
+//   - v: 指针类型的reflect.Value
+//
+// 功能: 处理指针链，检测循环引用，显示类型信息和指针地址，递归转储指向的值
 func (d *dumpState) dumpPtr(v reflect.Value) {
 	// Remove pointers at or below the current depth from map used to detect
 	// circular refs.
@@ -234,8 +258,11 @@ func (d *dumpState) dumpPtr(v reflect.Value) {
 	d.w.Write(closeParenBytes)
 }
 
-// dumpSlice handles formatting of arrays and slices.  Byte (uint8 under
-// reflection) arrays and slices are dumped in hexdump -C fashion.
+// dumpSlice 处理数组和切片的格式化。字节（反射下的uint8）数组和切片以hexdump -C方式转储。
+// 参数:
+//   - v: 数组或切片类型的reflect.Value
+//
+// 功能: 处理数组和切片的转储，支持字节数组的十六进制显示，限制显示元素数量，支持JSON输出
 func (d *dumpState) dumpSlice(v reflect.Value) {
 	// Determine whether this type should be hex dumped or not.  Also,
 	// for types which should be hexdumped, try to use the underlying data
@@ -368,10 +395,12 @@ func (d *dumpState) dumpSlice(v reflect.Value) {
 	}
 }
 
-// dump is the main workhorse for dumping a value.  It uses the passed reflect
-// value to figure out what kind of object we are dealing with and formats it
-// appropriately.  It is a recursive function, however circular data structures
-// are detected and handled properly.
+// dump 是转储值的主要工作函数。它使用传入的反射值来确定我们正在处理什么类型的对象，并适当地格式化它。
+// 这是一个递归函数，但是会检测并正确处理循环数据结构。
+// 参数:
+//   - v: 要转储的reflect.Value
+//
+// 功能: 根据值的类型进行相应的格式化输出，支持各种Go类型，包括基本类型、复合类型、指针等
 func (d *dumpState) dump(v reflect.Value) {
 	// Handle invalid reflect values immediately.
 	kind := v.Kind()
@@ -866,8 +895,13 @@ func (d *dumpState) dump(v reflect.Value) {
 	}
 }
 
-// fdump is a helper function to consolidate the logic from the various public
-// methods which take varying writers and config states.
+// fdump 是一个辅助函数，用于合并来自各种公共方法的逻辑，这些方法采用不同的写入器和配置状态。
+// 参数:
+//   - cs: 配置状态
+//   - w: 输出写入器
+//   - a: 要转储的参数列表
+//
+// 功能: 对每个参数进行转储，支持JSON和常规输出模式，处理nil值的特殊情况
 func fdump(cs *ConfigState, w io.Writer, a ...interface{}) {
 	for _, arg := range a {
 		if arg == nil {
@@ -914,14 +948,24 @@ func fdump(cs *ConfigState, w io.Writer, a ...interface{}) {
 	}
 }
 
-// Fdump formats and displays the passed arguments to io.Writer w.  It formats
-// exactly the same as Dump.
+// Fdump 将传入的参数格式化并显示到io.Writer w。格式与Dump完全相同。
+// 参数:
+//   - w: 输出写入器
+//   - a: 要转储的参数列表
+//
+// 功能: 使用全局配置将参数转储到指定的写入器
 func Fdump(w io.Writer, a ...interface{}) {
 	fdump(&Config, w, a...)
 }
 
-// Sdump returns a string with the passed arguments formatted exactly the same
-// as Dump.
+// Sdump 返回一个字符串，其中传入的参数格式与Dump完全相同。
+// 参数:
+//   - a: 要转储的参数列表
+//
+// 返回值:
+//   - string: 格式化后的字符串
+//
+// 功能: 将转储结果作为字符串返回，而不是输出到标准输出
 func Sdump(a ...interface{}) string {
 	var buf bytes.Buffer
 	fdump(&Config, &buf, a...)
@@ -929,34 +973,37 @@ func Sdump(a ...interface{}) string {
 }
 
 /*
-Dump displays the passed parameters to standard out with newlines, customizable
-indentation, and additional debug information such as complete types and all
-pointer addresses used to indirect to the final value.  It provides the
-following features over the built-in printing facilities provided by the fmt
-package:
+Dump 将传入的参数显示到标准输出，带有换行符、可自定义的缩进和额外的调试信息，
+如完整的类型和用于间接访问最终值的所有指针地址。它提供了以下优于fmt包内置打印功能的特性：
 
-  - Pointers are dereferenced and followed
-  - Circular data structures are detected and handled properly
-  - Custom Stringer/error interfaces are optionally invoked, including
-    on unexported types
-  - Custom types which only implement the Stringer/error interfaces via
-    a pointer receiver are optionally invoked when passing non-pointer
-    variables
-  - Byte arrays and slices are dumped like the hexdump -C command which
-    includes offsets, byte values in hex, and ASCII output
+  - 指针被解引用和跟踪
+  - 循环数据结构被检测并正确处理
+  - 自定义Stringer/error接口可选地被调用，包括未导出的类型
+  - 仅通过指针接收器实现Stringer/error接口的自定义类型在传递非指针变量时可选地被调用
+  - 字节数组和切片像hexdump -C命令一样转储，包括偏移量、十六进制字节值和ASCII输出
 
-The configuration options are controlled by an exported package global,
-spew.Config.  See ConfigState for options documentation.
+配置选项由导出的包全局变量spew.Config控制。请参阅ConfigState的选项文档。
 
-See Fdump if you would prefer dumping to an arbitrary io.Writer or Sdump to
-get the formatted result as a string.
+如果您希望转储到任意io.Writer，请参阅Fdump；如果您希望将格式化结果作为字符串获取，请参阅Sdump。
+
+参数:
+  - a: 要转储的参数列表
+
+功能: 将参数转储到标准输出
 */
 func Dump(a ...interface{}) {
 	fdump(&Config, os.Stdout, a...)
 }
 
-// ToJSON returns a JSON representation of the passed arguments.
-// It enables the EnableJSONOutput option temporarily to generate the JSON output.
+// ToJSON 返回传入参数的JSON表示。
+// 它临时启用EnableJSONOutput选项来生成JSON输出。
+// 参数:
+//   - a: 要转换为JSON的参数列表
+//
+// 返回值:
+//   - string: JSON格式的字符串
+//
+// 功能: 将Go对象转换为JSON字符串表示
 func ToJSON(a ...interface{}) string {
 	cs := *NewDefaultConfig()
 	cs.EnableJSONOutput = true
@@ -965,15 +1012,27 @@ func ToJSON(a ...interface{}) string {
 	return buf.String()
 }
 
-// SdumpJSON returns a JSON representation of the passed arguments.
-// This is equivalent to ToJSON but maintains naming consistency with other
-// Sdump functions.
+// SdumpJSON 返回传入参数的JSON表示。
+// 这等同于ToJSON，但保持与其他Sdump函数的命名一致性。
+// 参数:
+//   - a: 要转换为JSON的参数列表
+//
+// 返回值:
+//   - string: JSON格式的字符串
+//
+// 功能: ToJSON的别名函数，保持命名一致性
 func SdumpJSON(a ...interface{}) string {
 	return ToJSON(a...)
 }
 
-// ConfigState.ToJSON is a convenience method that enables JSON output and
-// returns a JSON representation of the passed arguments.
+// ToJSON 是ConfigState的便利方法，它启用JSON输出并返回传入参数的JSON表示。
+// 参数:
+//   - a: 要转换为JSON的参数列表
+//
+// 返回值:
+//   - string: JSON格式的字符串
+//
+// 功能: 在特定配置状态下将Go对象转换为JSON字符串，转换后恢复原始的JSON输出设置
 func (c *ConfigState) ToJSON(a ...interface{}) string {
 	originalJSONSetting := c.EnableJSONOutput
 	c.EnableJSONOutput = true
