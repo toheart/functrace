@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"reflect"
 
-	go_spew "github.com/davecgh/go-spew/spew"
 	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/sirupsen/logrus"
 	"github.com/toheart/functrace/domain/model"
@@ -113,7 +112,7 @@ func (t *TraceInstance) DealPointerMethod(traceID int64, params []interface{}) {
 
 	// 检查缓存中是否存在该接收者
 	info := t.GetParamFromCache(addr)
-	go_spew.Config.MaxDepth = 2
+	// go_spew.Config.MaxDepth = 2
 	if info != nil {
 		// 存在则计算差异
 		if diff, err := createJSONPatch(info.Data, receiverData); err != nil {
@@ -121,10 +120,9 @@ func (t *TraceInstance) DealPointerMethod(traceID int64, params []interface{}) {
 				"error":        err,
 				"info":         info,
 				"receiverData": spew.Sdump(receiver),
-				"receiver":     go_spew.Sdump(receiver),
+				// "receiver":     go_spew.Sdump(receiver),
 			}).Error("failed to create json patch")
 			paramStoreData.Data = receiverData
-			panic(err)
 		} else {
 			paramStoreData.Data = diff
 			paramStoreData.BaseID = info.BaseID
