@@ -1,8 +1,6 @@
 package trace
 
 import (
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -126,12 +124,7 @@ func (t *TraceInstance) deleteGoroutineRunning(gid uint64) {
 // monitorGoroutines 定时监控goroutine的运行状态
 func (t *TraceInstance) monitorGoroutines() {
 	// 获取监控间隔时间
-	interval := DefaultMonitorInterval
-	if intervalStr := os.Getenv(EnvGoroutineMonitorInterval); intervalStr != "" {
-		if i, err := strconv.Atoi(intervalStr); err == nil && i > 0 {
-			interval = i
-		}
-	}
+	interval := t.config.MonitorInterval
 
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()

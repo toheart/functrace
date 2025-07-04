@@ -9,7 +9,6 @@ import (
 
 	"github.com/toheart/functrace/domain"
 	"github.com/toheart/functrace/domain/model"
-	"github.com/toheart/functrace/spew"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -18,20 +17,24 @@ import (
 
 // 测试设置
 func setupTestTraceInstance() *TraceInstance {
+	// 创建测试配置
+	config := &Config{
+		MonitorInterval: 10,
+		MaxDepth:        10,
+		IgnoreNames:     []string{},
+		DBType:          "sqlite",
+		InsertMode:      SyncMode,
+		ParamStoreMode:  ParamStoreModeNone,
+		LogFileName:     LogFileName,
+	}
+
 	// 创建一个测试用的 TraceInstance
 	t := &TraceInstance{
 		indentations:     make(map[uint64]*TraceIndent),
 		log:              logrus.New(),
 		GoroutineRunning: make(map[uint64]*GoroutineInfo),
-		paramCache:       make(map[string]*receiverInfo),
-		IgnoreNames:      []string{},
-		spewConfig:       &spew.ConfigState{},
+		config:           config,
 	}
-	// 设置 spewConfig
-	t.spewConfig.DisableMethods = true
-	t.spewConfig.DisableCapacities = true
-	t.spewConfig.EnableJSONOutput = true
-	t.spewConfig.MaxDepth = 10
 	return t
 }
 
@@ -48,6 +51,29 @@ func (m *MockParamRepository) SaveParam(param *model.ParamStoreData) (int64, err
 func (m *MockParamRepository) FindParamsByTraceID(traceId int64) ([]model.ParamStoreData, error) {
 	args := m.Called(traceId)
 	return args.Get(0).([]model.ParamStoreData), args.Error(1)
+}
+
+func (m *MockParamRepository) SaveParamCache(cache *model.ParamCache) (int64, error) {
+	args := m.Called(cache)
+	return args.Get(0).(int64), args.Error(1)
+}
+
+func (m *MockParamRepository) FindParamCacheByAddr(addr string) (*model.ParamCache, error) {
+	args := m.Called(addr)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.ParamCache), args.Error(1)
+}
+
+func (m *MockParamRepository) DeleteParamCacheByTraceID(traceId int64) error {
+	args := m.Called(traceId)
+	return args.Error(0)
+}
+
+func (m *MockParamRepository) UpdateParamCache(cache *model.ParamCache) error {
+	args := m.Called(cache)
+	return args.Error(0)
 }
 
 // MockTraceRepository 是 TraceRepository 的模拟实现
@@ -234,6 +260,8 @@ func TestDealPointerMethodWithParams(t *testing.T) {
 
 	// 设置预期行为
 	mockParamRepo.On("SaveParam", mock.AnythingOfType("*model.ParamStoreData")).Return(int64(1), nil)
+	mockParamRepo.On("FindParamCacheByAddr", mock.AnythingOfType("string")).Return((*model.ParamCache)(nil), nil)
+	mockParamRepo.On("SaveParamCache", mock.AnythingOfType("*model.ParamCache")).Return(int64(1), nil)
 
 	// 创建一个接收者对象和其他参数
 	receiver := struct{ Value string }{"receiver"}
@@ -269,33 +297,41 @@ func TestDealPointerMethodWithCache(t *testing.T) {
 
 	// 设置预期行为
 	mockParamRepo.On("SaveParam", mock.AnythingOfType("*model.ParamStoreData")).Return(int64(1), nil)
+	mockParamRepo.On("SaveParamCache", mock.AnythingOfType("*model.ParamCache")).Return(int64(1), nil)
 
 	// 创建一个接收者对象
 	receiver := &struct{ Value string }{"receiver"}
 	addr := fmt.Sprintf("%d", reflect.ValueOf(receiver).Pointer())
 
-	// 首次调用 - 应该将接收者添加到缓存
+	// 首次调用 - 模拟缓存中没有数据
 	traceID1 := int64(123)
+	mockParamRepo.On("FindParamCacheByAddr", addr).Return((*model.ParamCache)(nil), nil).Once()
+
 	traceInstance.DealPointerMethod(traceID1, []interface{}{receiver})
-	t.Logf("map: %v", traceInstance.paramCache)
 	// 等待 goroutine 完成
 	time.Sleep(100 * time.Millisecond)
 
-	// 验证缓存中存在接收者
-	cacheItem, exists := traceInstance.paramCache[addr]
-	assert.True(t, exists, "接收者应该被添加到缓存中")
-	assert.Equal(t, traceID1, cacheItem.BaseID, "缓存中的BaseID应该等于第一次跟踪ID")
-
-	// 第二次调用 - 使用相同的接收者，但值发生变化
+	// 第二次调用 - 模拟缓存中有数据
 	receiver.Value = "modified"
 	traceID2 := int64(456)
+	cachedParam := &model.ParamCache{
+		ID:      1,
+		Addr:    addr,
+		TraceID: traceID1,
+		BaseID:  1,
+		Data:    `{"Value":"receiver"}`,
+	}
+	mockParamRepo.On("FindParamCacheByAddr", addr).Return(cachedParam, nil).Once()
+
 	traceInstance.DealPointerMethod(traceID2, []interface{}{receiver})
 
 	// 等待 goroutine 完成
 	time.Sleep(100 * time.Millisecond)
 
-	// 验证 SaveParam 调用了2次
+	// 验证期望的调用
 	mockParamRepo.AssertNumberOfCalls(t, "SaveParam", 2)
+	mockParamRepo.AssertNumberOfCalls(t, "SaveParamCache", 1)       // 第一次调用时保存缓存
+	mockParamRepo.AssertNumberOfCalls(t, "FindParamCacheByAddr", 2) // 两次调用都查找缓存
 	mockParamRepo.AssertExpectations(t)
 }
 

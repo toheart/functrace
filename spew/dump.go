@@ -18,14 +18,17 @@ package spew
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"reflect"
 	"regexp"
-	"strconv"
-
-	"github.com/tidwall/sjson"
+	"sync"
+	"unicode/utf8"
+	"unsafe"
 )
 
 var (
@@ -40,19 +43,60 @@ var (
 
 	// cUint8tCharRE是匹配cgo uint8_t的正则表达式。用于检测uint8_t数组以进行十六进制转储。
 	cUint8tCharRE = regexp.MustCompile(`^.*\._Ctype_uint8_t$`)
+
+	// dumpStatePool 是dumpState对象的内存池，用于复用对象以减少内存分配
+	dumpStatePool = sync.Pool{
+		New: func() interface{} {
+			return &dumpState{
+				pointers: make(map[uintptr]int),
+			}
+		},
+	}
 )
 
-// dumpState包含转储操作状态的信息。
-// 用于在递归转储过程中维护状态信息，包括输出流、深度、指针引用、配置状态等。
+// dumpState 包含JSON转储操作的状态信息
+// 这是纯JSON架构，不再支持文本输出
 type dumpState struct {
-	w                io.Writer       // 输出流
-	depth            int             // 当前递归深度
-	pointers         map[uintptr]int // 已处理的指针映射，用于检测循环引用
-	ignoreNextType   bool            // 是否忽略下一个类型输出
-	ignoreNextIndent bool            // 是否忽略下一个缩进
-	cs               *ConfigState    // 配置状态
-	jsonOutput       string          // JSON输出字符串
-	currentPath      string          // 当前JSON路径
+	depth    int             // 当前递归深度
+	pointers map[uintptr]int // 已处理的指针映射，用于检测循环引用
+	cs       *ConfigState    // 配置状态
+	root     interface{}     // 最终递归生成的对象树（map/slice/值）
+	visited  map[uintptr]int // 用于检测循环引用
+}
+
+// reset 重置dumpState到初始状态，用于内存池复用
+// 清理所有状态字段，准备下次使用
+func (d *dumpState) reset() {
+	d.depth = 0
+	// 清空pointers map但保留其容量以避免重新分配
+	for k := range d.pointers {
+		delete(d.pointers, k)
+	}
+	d.cs = nil
+	d.root = nil
+	d.visited = nil
+}
+
+// getDumpState 从内存池获取一个dumpState对象并初始化
+// 参数:
+//   - cs: 配置状态
+//
+// 返回值:
+//   - *dumpState: 初始化的dumpState对象
+func getDumpState(cs *ConfigState) *dumpState {
+	d := dumpStatePool.Get().(*dumpState)
+	d.cs = cs
+	d.depth = 0
+	d.root = nil
+	return d
+}
+
+// putDumpState 将dumpState对象归还到内存池
+// 参数:
+//   - d: 要归还的dumpState对象
+func putDumpState(d *dumpState) {
+	d.reset()
+	dumpStatePool.Put(d)
 }
 
 // safeReflectCall 安全地执行反射操作，捕获可能的panic
@@ -76,40 +120,6 @@ func (d *dumpState) safeReflectCall(fn func() interface{}, errorMsg string) (res
 	return
 }
 
-// indent 根据深度级别和cs.Indent选项执行缩进。
-// 如果ignoreNextIndent为true，则跳过此次缩进并重置该标志。
-func (d *dumpState) indent() {
-	if d.ignoreNextIndent {
-		d.ignoreNextIndent = false
-		return
-	}
-	d.w.Write(bytes.Repeat([]byte(d.cs.Indent), d.depth))
-}
-
-// setJSONValue 将值添加到JSON输出中
-// 参数:
-//   - path: JSON路径
-//   - value: 要设置的值
-//
-// 功能: 使用sjson库将键值对添加到JSON输出字符串中，如果SkipNilValues为true且值为nil则跳过
-func (d *dumpState) setJSONValue(path string, value interface{}) {
-	// 如果SkipNilValues为true且值为nil，则跳过设置
-	if d.cs.SkipNilValues && value == nil {
-		return
-	}
-
-	var err error
-	if d.jsonOutput == "" {
-		d.jsonOutput = "{}"
-	}
-
-	d.jsonOutput, err = sjson.Set(d.jsonOutput, path, value)
-	if err != nil {
-		// 如果设置JSON失败，我们仍然尝试继续
-		fmt.Fprintf(d.w, "/* JSON set error for path %s: %v */", path, err)
-	}
-}
-
 // getUint8String 获取uint8数组或切片的字符串表示
 // 参数:
 //   - buf: uint8数组或切片
@@ -125,7 +135,23 @@ func getUint8String(buf []uint8) string {
 	if len(buf) > 2048 {
 		buf = buf[:2048]
 	}
-	// 始终返回十六进制表示，不再尝试转换为字符串
+
+	// 检查是否为可打印的ASCII文本
+	isPrintableASCII := true
+	for _, b := range buf {
+		// ASCII范围内的可打印字符（32-126）以及常见的空白字符（9, 10, 13）
+		if !((b >= 32 && b <= 126) || b == 9 || b == 10 || b == 13) {
+			isPrintableASCII = false
+			break
+		}
+	}
+
+	// 如果是可打印的ASCII文本，直接返回字符串
+	if isPrintableASCII {
+		return string(buf)
+	}
+
+	// 否则返回十六进制表示
 	var sb bytes.Buffer
 
 	// 以十六进制格式化，每16个字节一行
@@ -175,776 +201,360 @@ func (d *dumpState) unpackValue(v reflect.Value) reflect.Value {
 	return v
 }
 
-// dumpPtr 通过必要的间接引用来处理指针的格式化。
-// 参数:
-//   - v: 指针类型的reflect.Value
-//
-// 功能: 处理指针链，检测循环引用，显示类型信息和指针地址，递归转储指向的值
-func (d *dumpState) dumpPtr(v reflect.Value) {
-	// Remove pointers at or below the current depth from map used to detect
-	// circular refs.
-	for k, depth := range d.pointers {
-		if depth >= d.depth {
-			delete(d.pointers, k)
-		}
-	}
-
-	// Keep list of all dereferenced pointers to show later.
-	pointerChain := make([]uintptr, 0)
-
-	// Figure out how many levels of indirection there are by dereferencing
-	// pointers and unpacking interfaces down the chain while detecting circular
-	// references.
-	nilFound := false
-	cycleFound := false
-	indirects := 0
-	ve := v
-	for ve.Kind() == reflect.Ptr {
-		if ve.IsNil() {
-			nilFound = true
-			break
-		}
-		indirects++
-		addr := ve.Pointer()
-		pointerChain = append(pointerChain, addr)
-		if pd, ok := d.pointers[addr]; ok && pd < d.depth {
-			cycleFound = true
-			indirects--
-			break
-		}
-		d.pointers[addr] = d.depth
-
-		ve = ve.Elem()
-		if ve.Kind() == reflect.Interface {
-			if ve.IsNil() {
-				nilFound = true
-				break
-			}
-			ve = ve.Elem()
-		}
-	}
-
-	// Display type information.
-	d.w.Write(openParenBytes)
-	d.w.Write(bytes.Repeat(asteriskBytes, indirects))
-	d.w.Write([]byte(ve.Type().String()))
-	d.w.Write(closeParenBytes)
-
-	// Display pointer information.
-	if !d.cs.DisablePointerAddresses && len(pointerChain) > 0 {
-		d.w.Write(openParenBytes)
-		for i, addr := range pointerChain {
-			if i > 0 {
-				d.w.Write(pointerChainBytes)
-			}
-			printHexPtr(d.w, addr)
-		}
-		d.w.Write(closeParenBytes)
-	}
-
-	// Display dereferenced value.
-	d.w.Write(openParenBytes)
-	switch {
-	case nilFound:
-		d.w.Write(nilAngleBytes)
-
-	case cycleFound:
-		d.w.Write(circularBytes)
-
-	default:
-		d.ignoreNextType = true
-		d.dump(ve)
-	}
-	d.w.Write(closeParenBytes)
-}
-
-// dumpSlice 处理数组和切片的格式化。字节（反射下的uint8）数组和切片以hexdump -C方式转储。
-// 参数:
-//   - v: 数组或切片类型的reflect.Value
-//
-// 功能: 处理数组和切片的转储，支持字节数组的十六进制显示，限制显示元素数量，支持JSON输出
-func (d *dumpState) dumpSlice(v reflect.Value) {
-	// Determine whether this type should be hex dumped or not.  Also,
-	// for types which should be hexdumped, try to use the underlying data
-	// first, then fall back to trying to convert them to a uint8 slice.
-	var buf []uint8
-	doConvert := false
-	numEntries := v.Len()
-
-	// 限制最多显示10个元素
-	const maxElements = 10
-	var truncated bool
-	if numEntries > maxElements {
-		truncated = true
-		numEntries = maxElements
-	}
-
-	if numEntries > 0 {
-		vt := v.Index(0).Type()
-		vts := vt.String()
-		switch {
-		// C types that need to be converted.
-		case cCharRE.MatchString(vts):
-			fallthrough
-		case cUnsignedCharRE.MatchString(vts):
-			fallthrough
-		case cUint8tCharRE.MatchString(vts):
-			doConvert = true
-
-		// Try to use existing uint8 slices and fall back to converting
-		// and copying if that fails.
-		case vt.Kind() == reflect.Uint8:
-			// 我们需要一个可以寻址的接口来将类型转换为字节切片。然而，reflect包在某些情况下，如
-			// 未导出结构体字段，不会给我们一个接口，以执行可见性规则。我们使用不安全的方法，仅在可用时，
-			// 来绕过这些限制，因为这个包不修改值。
-			vs := v
-			if !vs.CanInterface() || !vs.CanAddr() {
-				vs = unsafeReflectValue(vs)
-			}
-			if !UnsafeDisabled {
-				vs = vs.Slice(0, numEntries)
-
-				// Use the existing uint8 slice if it can be
-				// type asserted.
-				iface := vs.Interface()
-				if slice, ok := iface.([]uint8); ok {
-					buf = slice
-					break
-				}
-			}
-
-			// The underlying data needs to be converted if it can't
-			// be type asserted to a uint8 slice.
-			doConvert = true
-		}
-
-		// Copy and convert the underlying type if needed.
-		if doConvert && vt.ConvertibleTo(uint8Type) {
-			// Convert and copy each element into a uint8 byte
-			// slice.
-			buf = make([]uint8, numEntries)
-			for i := 0; i < numEntries; i++ {
-				vv := v.Index(i)
-				converted := vv.Convert(uint8Type)
-				if converted.CanUint() {
-					buf[i] = uint8(converted.Uint())
-				} else {
-					buf[i] = 0
-				}
-			}
-		}
-	}
-
-	// Recursively call dump for each item.
-	if d.cs.EnableJSONOutput {
-		d.setJSONValue(d.currentPath, getUint8String(buf))
-		// 为JSON输出准备数组
-		for i := 0; i < numEntries; i++ {
-			// 获取元素值
-			elemValue := d.unpackValue(v.Index(i))
-
-			// 如果值为nil且SkipNilValues为true，则跳过该元素
-			if d.cs.SkipNilValues &&
-				(elemValue.Kind() == reflect.Interface || elemValue.Kind() == reflect.Ptr ||
-					elemValue.Kind() == reflect.Map || elemValue.Kind() == reflect.Slice ||
-					elemValue.Kind() == reflect.Chan) && elemValue.IsNil() {
-				continue
-			}
-
-			// 构建数组元素的路径
-			indexPath := fmt.Sprintf("%s[%d]", d.currentPath, i)
-			oldPath := d.currentPath
-			d.currentPath = indexPath
-
-			// 递归调用dump
-			d.dump(elemValue)
-
-			// 恢复路径
-			d.currentPath = oldPath
-
-			if i < (numEntries - 1) {
-				d.w.Write(commaNewlineBytes)
-			} else {
-				d.w.Write(newlineBytes)
-			}
-		}
-
-		// 如果有元素被截断，添加提示信息
-		if truncated {
-			truncatedPath := fmt.Sprintf("%s.truncated", d.currentPath)
-			totalLen := v.Len()
-			d.setJSONValue(truncatedPath, fmt.Sprintf("... 还有 %d 个元素被截断", totalLen-maxElements))
-		}
-	} else {
-		// 原始的非JSON输出逻辑
-		for i := 0; i < numEntries; i++ {
-			d.dump(d.unpackValue(v.Index(i)))
-			if i < (numEntries - 1) {
-				d.w.Write(commaNewlineBytes)
-			} else {
-				d.w.Write(newlineBytes)
-			}
-		}
-
-		// 如果有元素被截断，添加提示信息
-		if truncated {
-			d.indent()
-			totalLen := v.Len()
-			d.w.Write([]byte(fmt.Sprintf("... 还有 %d 个元素被截断\n", totalLen-maxElements)))
-		}
-	}
-}
-
 // dump 是转储值的主要工作函数。它使用传入的反射值来确定我们正在处理什么类型的对象，并适当地格式化它。
 // 这是一个递归函数，但是会检测并正确处理循环数据结构。
 // 参数:
 //   - v: 要转储的reflect.Value
 //
 // 功能: 根据值的类型进行相应的格式化输出，支持各种Go类型，包括基本类型、复合类型、指针等
-func (d *dumpState) dump(v reflect.Value) {
-	// Handle invalid reflect values immediately.
-	kind := v.Kind()
-	if kind == reflect.Invalid {
-		d.w.Write(invalidAngleBytes)
-		if d.cs.EnableJSONOutput {
-			d.setJSONValue(d.currentPath, "invalid")
+func (d *dumpState) dump(v reflect.Value) interface{} {
+	return d.dumpWithDepth(v, -1)
+}
+
+func (d *dumpState) dumpWithDepth(v reflect.Value, depth int) interface{} {
+	if !v.IsValid() {
+		return "invalid"
+	}
+
+	// 深度截断：只在进入子元素/字段时判断
+	if d.cs.MaxDepth > 0 && depth > d.cs.MaxDepth && isDeepType(v.Kind()) {
+		var l, c int
+		switch v.Kind() {
+		case reflect.Slice, reflect.Array:
+			l = v.Len()
+			c = v.Cap()
+		case reflect.Map:
+			l = v.Len()
+			c = 0
+		case reflect.Interface:
+			l, c = 1, 1
 		}
-		return
+		return truncatedContainerInfo(v.Type().String(), depth, d.cs.MaxDepth, l, c)
 	}
 
-	// Handle pointers specially.
-	if kind == reflect.Ptr {
-		d.indent()
-		d.dumpPtr(v)
-		return
+	if v.Kind() == reflect.Interface && !v.IsNil() {
+		return d.dumpWithDepth(v.Elem(), depth+1)
 	}
 
-	// Print type information unless already handled elsewhere.
-	if !d.ignoreNextType {
-		d.indent()
-		d.w.Write(openParenBytes)
-		typeStr := v.Type().String()
-		d.w.Write([]byte(typeStr))
-		d.w.Write(closeParenBytes)
-		d.w.Write(spaceBytes)
-
-		// 如果启用了JSON输出，添加类型信息到JSON
-		if d.cs.EnableJSONOutput {
-			typePath := d.currentPath
-			if typePath != "" {
-				typePath = typePath + ".type"
-			} else {
-				typePath = "type"
-			}
-			d.setJSONValue(typePath, typeStr)
-		}
-	}
-	d.ignoreNextType = false
-
-	// Display length and capacity if the built-in len and cap functions
-	// work with the value's kind and the len/cap itself is non-zero.
-	valueLen, valueCap := 0, 0
+	var addr uintptr
+	isRef := false
 	switch v.Kind() {
-	case reflect.Array, reflect.Slice, reflect.Chan:
-		valueLen, valueCap = v.Len(), v.Cap()
-	case reflect.Map, reflect.String:
-		valueLen = v.Len()
-	}
-	if valueLen != 0 || !d.cs.DisableCapacities && valueCap != 0 {
-		d.w.Write(openParenBytes)
-		if valueLen != 0 {
-			d.w.Write(lenEqualsBytes)
-			printInt(d.w, int64(valueLen), 10)
-
-			// 如果启用了JSON输出，添加长度信息到JSON
-			if d.cs.EnableJSONOutput {
-				lenPath := d.currentPath
-				if lenPath != "" {
-					lenPath = lenPath + ".length"
-				} else {
-					lenPath = "length"
-				}
-				d.setJSONValue(lenPath, valueLen)
-			}
-		}
-		if !d.cs.DisableCapacities && valueCap != 0 {
-			if valueLen != 0 {
-				d.w.Write(spaceBytes)
-			}
-			d.w.Write(capEqualsBytes)
-			printInt(d.w, int64(valueCap), 10)
-
-			// 如果启用了JSON输出，添加容量信息到JSON
-			if d.cs.EnableJSONOutput {
-				capPath := d.currentPath
-				if capPath != "" {
-					capPath = capPath + ".capacity"
-				} else {
-					capPath = "capacity"
-				}
-				d.setJSONValue(capPath, valueCap)
-			}
-		}
-		d.w.Write(closeParenBytes)
-		d.w.Write(spaceBytes)
-	}
-
-	// Call Stringer/error interfaces if they exist and the handle methods flag
-	// is enabled
-	if !d.cs.DisableMethods {
-		if (kind != reflect.Invalid) && (kind != reflect.Interface) {
-			if handled := handleMethods(d.cs, d.w, v); handled {
-				if d.cs.EnableJSONOutput {
-					// 对于实现了Stringer/error接口的对象，可以尝试获取字符串表示
-					if v.CanInterface() {
-						val := v.Interface()
-						var str string
-						if stringer, ok := val.(fmt.Stringer); ok {
-							str = stringer.String()
-						} else if err, ok := val.(error); ok {
-							str = err.Error()
-						}
-						if str != "" {
-							d.setJSONValue(d.currentPath, str)
-						}
-					}
-				}
-				return
-			}
-		}
-	}
-
-	switch kind {
-	case reflect.Invalid:
-		// Do nothing.  We should never get here since invalid has already
-		// been handled above.
-
-	case reflect.Bool:
-		val := v.Bool()
-		printBool(d.w, val)
-		if d.cs.EnableJSONOutput {
-			d.setJSONValue(d.currentPath, val)
-		}
-
-	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Int:
-		if v.CanInt() {
-			val := v.Int()
-			printInt(d.w, val, 10)
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, val)
-			}
-		} else {
-			d.w.Write([]byte("<invalid int value>"))
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "invalid int value")
-			}
-		}
-
-	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint:
-		if v.IsValid() && v.CanUint() {
-			val := v.Uint()
-			printUint(d.w, val, 10)
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, val)
-			}
-		} else {
-			d.w.Write([]byte("<invalid uint value>"))
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "invalid uint value")
-			}
-		}
-
-	case reflect.Float32:
-		if v.CanFloat() {
-			val := v.Float()
-			printFloat(d.w, val, 32)
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, val)
-			}
-		} else {
-			d.w.Write([]byte("<invalid float32 value>"))
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "invalid float32 value")
-			}
-		}
-
-	case reflect.Float64:
-		if v.CanFloat() {
-			val := v.Float()
-			printFloat(d.w, val, 64)
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, val)
-			}
-		} else {
-			d.w.Write([]byte("<invalid float64 value>"))
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "invalid float64 value")
-			}
-		}
-
-	case reflect.Complex64:
-		if v.CanComplex() {
-			val := v.Complex()
-			printComplex(d.w, val, 32)
-			if d.cs.EnableJSONOutput {
-				// JSON不支持复数，转换为字符串
-				d.setJSONValue(d.currentPath, fmt.Sprintf("%v", val))
-			}
-		} else {
-			d.w.Write([]byte("<invalid complex64 value>"))
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "invalid complex64 value")
-			}
-		}
-
-	case reflect.Complex128:
-		if v.CanComplex() {
-			val := v.Complex()
-			printComplex(d.w, val, 64)
-			if d.cs.EnableJSONOutput {
-				// JSON不支持复数，转换为字符串
-				d.setJSONValue(d.currentPath, fmt.Sprintf("%v", val))
-			}
-		} else {
-			d.w.Write([]byte("<invalid complex128 value>"))
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "invalid complex128 value")
-			}
-		}
-
-	case reflect.Slice:
-		if v.IsNil() {
-			d.w.Write(nilAngleBytes)
-			if d.cs.EnableJSONOutput && !d.cs.SkipNilValues {
-				d.setJSONValue(d.currentPath, nil)
-			}
-			break
-		}
-		fallthrough
-
-	case reflect.Array:
-		d.w.Write(openBraceNewlineBytes)
-		d.depth++
-		if (d.cs.MaxDepth != 0) && (d.depth > d.cs.MaxDepth) {
-			d.indent()
-			d.w.Write(maxNewlineBytes)
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "max depth reached")
-			}
-		} else {
-			oldPath := d.currentPath
-			d.dumpSlice(v)
-			d.currentPath = oldPath
-		}
-		d.depth--
-		d.indent()
-		d.w.Write(closeBraceBytes)
-
-	case reflect.String:
-		val := v.String()
-		d.w.Write([]byte(strconv.Quote(val)))
-		if d.cs.EnableJSONOutput {
-			d.setJSONValue(d.currentPath, val)
-		}
-
-	case reflect.Interface:
-		// The only time we should get here is for nil interfaces due to
-		// unpackValue calls.
-		if v.IsNil() {
-			d.w.Write(nilAngleBytes)
-			if d.cs.EnableJSONOutput && !d.cs.SkipNilValues {
-				d.setJSONValue(d.currentPath, nil)
-			}
-		}
-
 	case reflect.Ptr:
-		// Do nothing.  We should never get here since pointers have already
-		// been handled above.
+		if v.CanAddr() {
+			addr = v.UnsafeAddr()
+			isRef = true
+		}
+	}
+	if isRef && addr != 0 {
+		if d.visited == nil {
+			d.visited = make(map[uintptr]int)
+		}
+		if _, ok := d.visited[addr]; ok {
+			return fmt.Sprintf("<circular %s %#x>", v.Type().String(), addr)
+		}
+		d.visited[addr] = depth
+		defer delete(d.visited, addr)
+	}
 
-	case reflect.Map:
-		// nil maps should be indicated as different than empty maps
+	var result interface{}
+	switch v.Kind() {
+	case reflect.Bool:
+		result = v.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		result = v.Int()
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		result = v.Uint()
+	case reflect.Float32, reflect.Float64:
+		f := v.Float()
+		if math.IsNaN(f) {
+			result = "NaN"
+		} else if math.IsInf(f, 1) {
+			result = "Inf"
+		} else if math.IsInf(f, -1) {
+			result = "-Inf"
+		} else {
+			result = f
+		}
+	case reflect.Complex64, reflect.Complex128:
+		result = fmt.Sprintf("%v", v.Complex())
+	case reflect.String:
+		result = v.String()
+	case reflect.Ptr:
 		if v.IsNil() {
-			d.w.Write(nilAngleBytes)
-			if d.cs.EnableJSONOutput && !d.cs.SkipNilValues {
-				d.setJSONValue(d.currentPath, nil)
-			}
-			break
-		}
-
-		d.w.Write(openBraceNewlineBytes)
-		d.depth++
-		if (d.cs.MaxDepth != 0) && (d.depth > d.cs.MaxDepth) {
-			d.indent()
-			d.w.Write(maxNewlineBytes)
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "max depth reached")
-			}
+			result = nil
 		} else {
-			numEntries := v.Len()
-			keys := v.MapKeys()
-			if d.cs.SortKeys {
-				sortValues(keys, d.cs)
-			}
-
-			// 限制最多显示10个键值对
-			const maxMapElements = 10
-			var mapTruncated bool
-			if len(keys) > maxMapElements {
-				mapTruncated = true
-				keys = keys[:maxMapElements]
-				numEntries = maxMapElements
-			}
-
-			for i, key := range keys {
-				d.dump(d.unpackValue(key))
-				d.w.Write(colonSpaceBytes)
-				d.ignoreNextIndent = true
-
-				// 为JSON准备key
-				var keyStr string
-				k := d.unpackValue(key)
-				switch k.Kind() {
-				case reflect.String:
-					keyStr = k.String()
-				case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-					keyStr = fmt.Sprintf("%d", k.Int())
-				case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-					if k.CanUint() {
-						keyStr = fmt.Sprintf("%d", k.Uint())
-					} else {
-						keyStr = "invalid_uint"
-					}
-				default:
-					// 对于其他类型的键，使用其字符串表示
-					if k.CanInterface() {
-						keyStr = fmt.Sprintf("%v", k.Interface())
-					} else {
-						keyStr = fmt.Sprintf("%v", k.String())
-					}
-				}
-
-				// 保存当前路径并更新
-				oldPath := d.currentPath
-				if d.currentPath != "" {
-					d.currentPath = d.currentPath + "." + keyStr
-				} else {
-					d.currentPath = keyStr
-				}
-
-				// 获取值
-				mapValue := d.unpackValue(v.MapIndex(key))
-
-				// 如果值为nil且SkipNilValues为true，则跳过该键值对
-				if d.cs.SkipNilValues && d.cs.EnableJSONOutput &&
-					(mapValue.Kind() == reflect.Interface || mapValue.Kind() == reflect.Ptr ||
-						mapValue.Kind() == reflect.Map || mapValue.Kind() == reflect.Slice ||
-						mapValue.Kind() == reflect.Chan) && mapValue.IsNil() {
-					// 恢复路径
-					d.currentPath = oldPath
-					continue
-				}
-				// 转储值
-				d.dump(mapValue)
-
-				// 恢复路径
-				d.currentPath = oldPath
-
-				if i < (numEntries - 1) {
-					d.w.Write(commaNewlineBytes)
-				} else {
-					d.w.Write(newlineBytes)
+			addr := v.Pointer()
+			if d.visited != nil {
+				if _, ok := d.visited[addr]; ok {
+					result = fmt.Sprintf("<ptr %s %#x>", v.Type().String(), addr)
+					break
 				}
 			}
-
-			// 如果有键值对被截断，添加提示信息
-			if mapTruncated {
-				if d.cs.EnableJSONOutput {
-					truncatedPath := fmt.Sprintf("%s.truncated", d.currentPath)
-					totalLen := v.Len()
-					d.setJSONValue(truncatedPath, fmt.Sprintf("... 还有 %d 个键值对被截断", totalLen-maxMapElements))
-				} else {
-					d.indent()
-					totalLen := v.Len()
-					d.w.Write([]byte(fmt.Sprintf("... 还有 %d 个键值对被截断\n", totalLen-maxMapElements)))
-				}
-			}
+			// 递归展开指向内容
+			result = d.dumpWithDepth(v.Elem(), depth+1)
 		}
-		d.depth--
-		d.indent()
-		d.w.Write(closeBraceBytes)
-
 	case reflect.Struct:
-		d.w.Write(openBraceNewlineBytes)
-		d.depth++
-		if (d.cs.MaxDepth != 0) && (d.depth > d.cs.MaxDepth) {
-			d.indent()
-			d.w.Write(maxNewlineBytes)
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "max depth reached")
-			}
+		result = dumpStructFields(d, v, depth)
+	case reflect.Map:
+		if v.IsNil() {
+			result = nil
 		} else {
-			vt := v.Type()
-			numFields := v.NumField()
-			for i := 0; i < numFields; i++ {
-				d.indent()
-				vtf := vt.Field(i)
-				fieldName := vtf.Name
-				d.w.Write([]byte(fieldName))
-				d.w.Write(colonSpaceBytes)
-				d.ignoreNextIndent = true
-
-				// 保存当前路径并更新
-				oldPath := d.currentPath
-				if d.currentPath != "" {
-					d.currentPath = d.currentPath + "." + fieldName
-				} else {
-					d.currentPath = fieldName
-				}
-
-				// 获取字段值
-				fieldValue := d.unpackValue(v.Field(i))
-
-				// 如果字段值为nil且SkipNilValues为true，则跳过该字段
-				if d.cs.SkipNilValues && d.cs.EnableJSONOutput &&
-					(fieldValue.Kind() == reflect.Interface || fieldValue.Kind() == reflect.Ptr ||
-						fieldValue.Kind() == reflect.Map || fieldValue.Kind() == reflect.Slice ||
-						fieldValue.Kind() == reflect.Chan) && fieldValue.IsNil() {
-					// 恢复路径
-					d.currentPath = oldPath
+			result = dumpMapFields(d, v, depth)
+		}
+	case reflect.Slice, reflect.Array:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			b := v.Bytes()
+			// 优化：省略末尾零填充
+			totalLen := len(b)
+			end := totalLen
+			for end > 0 && b[end-1] == 0 {
+				end--
+			}
+			zeroCount := totalLen - end
+			var outStr string
+			if isPrintableOrControlASCII(b[:end]) || isJSON(b[:end]) {
+				outStr = string(b[:end])
+			} else {
+				outStr = hex.EncodeToString(b[:end])
+			}
+			if zeroCount > 0 {
+				outStr += fmt.Sprintf("...(truncated, %d zero bytes omitted, total %d bytes)", zeroCount, totalLen)
+			}
+			result = outStr
+		} else if v.Kind() == reflect.Slice && v.IsNil() {
+			result = nil
+		} else {
+			maxElem := d.cs.MaxElementsPerContainer
+			if maxElem <= 0 {
+				maxElem = 1000 // 默认值
+			}
+			arr := make([]interface{}, 0, v.Len())
+			limit := v.Len()
+			if limit > maxElem {
+				limit = maxElem
+			}
+			for i := 0; i < limit; i++ {
+				elem := v.Index(i)
+				if d.cs.SkipNilValues && (elem.Kind() == reflect.Ptr || elem.Kind() == reflect.Interface || elem.Kind() == reflect.Map || elem.Kind() == reflect.Slice) && elem.IsNil() {
 					continue
 				}
-
-				// 转储字段值
-				d.dump(fieldValue)
-
-				// 恢复路径
-				d.currentPath = oldPath
-
-				if i < (numFields - 1) {
-					d.w.Write(commaNewlineBytes)
-				} else {
-					d.w.Write(newlineBytes)
-				}
+				arr = append(arr, d.dumpWithDepth(elem, depth+1))
 			}
+			if v.Len() > maxElem {
+				arr = append(arr, map[string]interface{}{
+					"__truncated__": true,
+					"omitted":       v.Len() - maxElem,
+					"len":           v.Len(),
+					"cap":           v.Cap(),
+					"type":          v.Type().String(),
+				})
+			}
+			result = arr
 		}
-		d.depth--
-		d.indent()
-		d.w.Write(closeBraceBytes)
-
-	case reflect.Uintptr:
-		if v.IsValid() && v.CanUint() {
-			val := uintptr(v.Uint())
-			printHexPtr(d.w, val)
-			if d.cs.EnableJSONOutput {
-				// 将指针转换为字符串表示
-				d.setJSONValue(d.currentPath, fmt.Sprintf("0x%x", val))
-			}
+	case reflect.Chan:
+		if v.IsNil() {
+			result = nil
 		} else {
-			d.w.Write(invalidAngleBytes)
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "invalid uintptr")
-			}
+			// 输出类型和地址占位
+			result = fmt.Sprintf("<chan %s %#x>", v.Type().String(), v.Pointer())
 		}
-
-	case reflect.UnsafePointer, reflect.Chan, reflect.Func:
-		if v.IsValid() {
-			val := v.Pointer()
-			printHexPtr(d.w, val)
-			if d.cs.EnableJSONOutput {
-				// 将指针转换为字符串表示
-				d.setJSONValue(d.currentPath, fmt.Sprintf("0x%x", val))
-			}
+	case reflect.Func:
+		if v.IsNil() {
+			result = nil
 		} else {
-			d.w.Write(invalidAngleBytes)
-			if d.cs.EnableJSONOutput {
-				d.setJSONValue(d.currentPath, "invalid pointer")
-			}
+			// 输出类型和地址占位
+			result = fmt.Sprintf("<func %s %#x>", v.Type().String(), v.Pointer())
 		}
-
-	// There were not any other types at the time this code was written, but
-	// fall back to letting the default fmt package handle it in case any new
-	// types are added.
+	case reflect.UnsafePointer:
+		if v.IsNil() {
+			result = nil
+		} else {
+			// 输出类型和地址占位
+			result = fmt.Sprintf("<unsafe.Pointer %#x>", v.Pointer())
+		}
 	default:
-		var val interface{}
-		if v.CanInterface() {
-			// 使用安全调用来防止panic
-			if result, success := d.safeReflectCall(func() interface{} {
-				return v.Interface()
-			}, "invalid interface value"); success {
-				val = result
-				fmt.Fprintf(d.w, "%v", val)
-			} else {
-				val = result
-				d.w.Write([]byte(fmt.Sprintf("<%s>", result)))
-			}
-		} else {
-			// 即使是String()也可能panic，所以也要保护
-			if result, success := d.safeReflectCall(func() interface{} {
-				return v.String()
-			}, "invalid string value"); success {
-				val = result
-				fmt.Fprintf(d.w, "%v", val)
-			} else {
-				val = result
-				d.w.Write([]byte(fmt.Sprintf("<%s>", result)))
-			}
+		// 其它不支持的类型，输出类型信息
+		result = fmt.Sprintf("<unsupported %s>", v.Type().String())
+	}
+	return result
+}
+
+// 判断是否纯ASCII或常用控制字符（\n, \r, \t）
+func isPrintableOrControlASCII(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	for _, c := range b {
+		if (c < 32 && c != 10 && c != 13 && c != 9) || c > 126 {
+			return false
 		}
-		if d.cs.EnableJSONOutput {
-			d.setJSONValue(d.currentPath, val)
-		}
+	}
+	return true
+}
+
+// 判断是否为JSON
+func isJSON(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	if b[0] == '{' || b[0] == '[' {
+		return true
+	}
+	return false
+}
+
+// 判断是否为UTF-8
+func isUTF8(b []byte) bool {
+	return utf8.Valid(b)
+}
+
+// 工具函数：判断类型是否为深层结构
+func isDeepType(k reflect.Kind) bool {
+	switch k {
+	case reflect.Ptr, reflect.Struct, reflect.Map, reflect.Slice, reflect.Array:
+		return true
+	default:
+		return false
 	}
 }
 
+// 工具函数：生成截断信息（支持len/cap）
+func truncatedContainerInfo(typ string, depth, maxDepth, l, c int) map[string]interface{} {
+	info := map[string]interface{}{
+		"__truncated__": true,
+		"type":          typ,
+		"depth":         depth,
+		"max_depth":     maxDepth,
+	}
+	if l > 0 {
+		info["len"] = l
+	}
+	if c > 0 {
+		info["cap"] = c
+	}
+	return info
+}
+
+// 工具函数：结构体字段递归转储
+func dumpStructFields(d *dumpState, v reflect.Value, depth int) map[string]interface{} {
+	m := make(map[string]interface{})
+	t := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		field := t.Field(i)
+		fieldValue := v.Field(i)
+		var fieldResult interface{}
+
+		if !field.IsExported() {
+			// 只要允许unsafe，直接用unsafe读取，并递归dump
+			if d.cs != nil {
+				fv := bypassUnsafeReflectValue(field, v)
+				// 如果返回的是字符串，说明无法读取，否则递归dump
+				if fv.Kind() == reflect.String && fv.Type() == reflect.TypeOf("") {
+					fieldResult = fv.Interface()
+				} else {
+					fieldResult = d.dumpWithDepth(fv, depth+1)
+				}
+			} else {
+				fieldResult = "<unexported>"
+			}
+		} else {
+			if d.cs.SkipNilValues && (fieldValue.Kind() == reflect.Ptr || fieldValue.Kind() == reflect.Interface || fieldValue.Kind() == reflect.Map || fieldValue.Kind() == reflect.Slice) && fieldValue.IsNil() {
+				continue
+			}
+			if d.cs.MaxDepth > 0 && isDeepType(fieldValue.Kind()) && depth+1 > d.cs.MaxDepth {
+				l, c := 0, 0
+				switch fieldValue.Kind() {
+				case reflect.Slice, reflect.Array, reflect.Map:
+					l = fieldValue.Len()
+					if fieldValue.Kind() == reflect.Slice || fieldValue.Kind() == reflect.Array {
+						c = fieldValue.Cap()
+					}
+				}
+				fieldResult = truncatedContainerInfo(fieldValue.Type().String(), depth+1, d.cs.MaxDepth, l, c)
+			} else {
+				fieldResult = d.dumpWithDepth(fieldValue, depth+1)
+			}
+			// 无论是否截断，若为slice/array/map类型，补充len/cap
+			if fieldValue.Kind() == reflect.Slice || fieldValue.Kind() == reflect.Array || fieldValue.Kind() == reflect.Map {
+				if obj, ok := fieldResult.(map[string]interface{}); ok {
+					obj["len"] = fieldValue.Len()
+					if fieldValue.Kind() == reflect.Slice || fieldValue.Kind() == reflect.Array {
+						obj["cap"] = fieldValue.Cap()
+					}
+					fieldResult = obj
+				}
+			}
+		}
+		m[field.Name] = fieldResult
+	}
+	m["type"] = v.Type().String()
+	return m
+}
+
+// 参考 go-spew 官方实现，利用 reflect.NewAt+unsafe.Pointer 读取未导出字段
+// 只能在同包作用域下读取，跨包无效
+func bypassUnsafeReflectValue(field reflect.StructField, v reflect.Value) reflect.Value {
+	if !v.CanAddr() {
+		return reflect.ValueOf("<unexported, not addressable>")
+	}
+	ptr := unsafe.Pointer(v.UnsafeAddr() + field.Offset)
+	fv := reflect.NewAt(field.Type, ptr).Elem()
+	return fv
+}
+
+// 工具函数：map字段递归转储
+func dumpMapFields(d *dumpState, v reflect.Value, depth int) map[string]interface{} {
+	m := make(map[string]interface{})
+	for _, k := range v.MapKeys() {
+		val := v.MapIndex(k)
+		if d.cs.SkipNilValues && (val.Kind() == reflect.Ptr || val.Kind() == reflect.Interface || val.Kind() == reflect.Map || val.Kind() == reflect.Slice) && val.IsNil() {
+			continue
+		}
+		var valResult interface{}
+		if d.cs.MaxDepth > 0 && isDeepType(val.Kind()) && depth+1 > d.cs.MaxDepth {
+			l, c := 0, 0
+			switch val.Kind() {
+			case reflect.Slice, reflect.Array, reflect.Map:
+				l = val.Len()
+				if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
+					c = val.Cap()
+				}
+			}
+			valResult = truncatedContainerInfo(val.Type().String(), depth+1, d.cs.MaxDepth, l, c)
+		} else {
+			valResult = d.dumpWithDepth(val, depth+1)
+		}
+		// 无论是否截断，若为slice/array/map类型，补充len/cap
+		if val.Kind() == reflect.Slice || val.Kind() == reflect.Array || val.Kind() == reflect.Map {
+			if obj, ok := valResult.(map[string]interface{}); ok {
+				obj["len"] = val.Len()
+				if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
+					obj["cap"] = val.Cap()
+				}
+				valResult = obj
+			}
+		}
+		m[fmt.Sprint(k.Interface())] = valResult
+	}
+	return m
+}
+
 // fdump 是一个辅助函数，用于合并来自各种公共方法的逻辑，这些方法采用不同的写入器和配置状态。
+// 现在只支持JSON输出模式
 // 参数:
 //   - cs: 配置状态
 //   - w: 输出写入器
 //   - a: 要转储的参数列表
 //
-// 功能: 对每个参数进行转储，支持JSON和常规输出模式，处理nil值的特殊情况
+// 功能: 对每个参数进行JSON转储，处理nil值的特殊情况
 func fdump(cs *ConfigState, w io.Writer, a ...interface{}) {
 	for _, arg := range a {
-		if arg == nil {
-			// 如果SkipNilValues为true，则跳过nil值
-			if cs.SkipNilValues {
-				continue
-			}
-
-			if cs.EnableJSONOutput {
-				json := "{\"value\": null}"
-				w.Write([]byte(json))
-				w.Write(newlineBytes)
-			} else {
-				w.Write(interfaceBytes)
-				w.Write(spaceBytes)
-				w.Write(nilAngleBytes)
-				w.Write(newlineBytes)
-			}
-			continue
-		}
-
-		d := dumpState{w: w, cs: cs}
-		d.pointers = make(map[uintptr]int)
-
-		// 如果启用了JSON输出，初始化JSON字符串
-		if cs.EnableJSONOutput {
-			d.jsonOutput = "{}"
-			d.currentPath = "value"
-
-			// 在JSON模式下，我们不直接写入输出
-			// 创建一个空缓冲区，后面会忽略它的内容
-			d.w = &bytes.Buffer{}
-		}
-		v := reflect.ValueOf(arg)
-		d.dump(v)
-
-		// 如果启用了JSON输出，只写入JSON字符串
-		if cs.EnableJSONOutput {
-			w.Write([]byte(d.jsonOutput))
-			w.Write(newlineBytes)
-		} else {
-			d.w.Write(newlineBytes)
-		}
+		d := getDumpState(cs)
+		result := d.dump(reflect.ValueOf(arg))
+		enc := json.NewEncoder(w)
+		enc.SetEscapeHTML(false)
+		enc.Encode(map[string]interface{}{"value": result})
+		putDumpState(d)
 	}
 }
 
@@ -996,7 +606,6 @@ func Dump(a ...interface{}) {
 }
 
 // ToJSON 返回传入参数的JSON表示。
-// 它临时启用EnableJSONOutput选项来生成JSON输出。
 // 参数:
 //   - a: 要转换为JSON的参数列表
 //
@@ -1005,8 +614,7 @@ func Dump(a ...interface{}) {
 //
 // 功能: 将Go对象转换为JSON字符串表示
 func ToJSON(a ...interface{}) string {
-	cs := *NewDefaultConfig()
-	cs.EnableJSONOutput = true
+	cs := ConfigState{Indent: " "}
 	var buf bytes.Buffer
 	fdump(&cs, &buf, a...)
 	return buf.String()
@@ -1025,19 +633,56 @@ func SdumpJSON(a ...interface{}) string {
 	return ToJSON(a...)
 }
 
-// ToJSON 是ConfigState的便利方法，它启用JSON输出并返回传入参数的JSON表示。
+// ToJSON 是ConfigState的便利方法，返回传入参数的JSON表示。
 // 参数:
 //   - a: 要转换为JSON的参数列表
 //
 // 返回值:
 //   - string: JSON格式的字符串
 //
-// 功能: 在特定配置状态下将Go对象转换为JSON字符串，转换后恢复原始的JSON输出设置
+// 功能: 在特定配置状态下将Go对象转换为JSON字符串
 func (c *ConfigState) ToJSON(a ...interface{}) string {
-	originalJSONSetting := c.EnableJSONOutput
-	c.EnableJSONOutput = true
 	var buf bytes.Buffer
 	fdump(c, &buf, a...)
-	c.EnableJSONOutput = originalJSONSetting
 	return buf.String()
+}
+
+// GetPoolStats 返回内存池的统计信息（用于调试和性能监控）
+// 注意：这是一个调试函数，在生产代码中应谨慎使用
+func GetPoolStats() (inUse int, available int) {
+	// 由于sync.Pool没有直接暴露统计信息的API，
+	// 我们通过临时获取和归还对象来检查池的状态
+	var borrowed []*dumpState
+
+	// 尝试借用最多10个对象来估算可用对象数量
+	for i := 0; i < 10; i++ {
+		if d := dumpStatePool.Get().(*dumpState); d != nil {
+			borrowed = append(borrowed, d)
+		} else {
+			break
+		}
+	}
+
+	available = len(borrowed)
+
+	// 归还所有借用的对象
+	for _, d := range borrowed {
+		dumpStatePool.Put(d)
+	}
+
+	return 0, available // inUse 无法准确获取，返回0
+}
+
+// DumpToJSON 递归转储对象为 JSON 字符串，兼容原有 spew 行为
+func DumpToJSON(v interface{}, cs *ConfigState) (string, error) {
+	d := &dumpState{
+		cs:    cs,
+		depth: 0,
+	}
+	root := d.dump(reflect.ValueOf(v))
+	data, err := json.Marshal(root)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }

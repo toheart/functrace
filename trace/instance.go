@@ -1,7 +1,6 @@
 package trace
 
 import (
-	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -64,13 +63,13 @@ type TraceInstance struct {
 	log              *logrus.Logger
 	closed           bool                      // 标志位表示是否已关闭
 	GoroutineRunning map[uint64]*GoroutineInfo // 管理运行中的goroutine, key为gid, value为数据库id
-	paramCache       map[string]*receiverInfo  // 管理参数缓存, key为值指针地址, value为参数缓存
 
-	OpChan      chan *DataOp
-	dataClose   chan struct{}
-	insertMode  string // 数据库插入模式：sync 同步，async 异步
-	IgnoreNames []string
-	spewConfig  *spew.ConfigState
+	OpChan    chan *DataOp
+	dataClose chan struct{}
+	config    *Config // 统一的配置管理
+
+	// 内存监控器
+	memoryMonitor *MemoryMonitor
 }
 
 // NewTraceInstance 初始化并返回 TraceInstance 的单例实例
@@ -85,13 +84,24 @@ func NewTraceInstance() *TraceInstance {
 			return
 		}
 		instance.log.Info("init database success")
-		instance.log.WithFields(logrus.Fields{"config": spew.Config}).Info("spew config")
+		instance.log.WithFields(logrus.Fields{"config": instance.config.String()}).Info("trace config initialized")
+		instance.log.WithFields(logrus.Fields{"mode": instance.config.ParamStoreMode}).Info("param store mode initialized")
 
 		// 启动协程监控
 		go instance.monitorGoroutines()
 		instance.log.Info("start goroutine monitor")
+
+		// 根据参数存储模式决定是否启动内存监控器
+		if instance.config.ParamStoreMode != ParamStoreModeNone {
+			instance.memoryMonitor.Start()
+			instance.log.WithFields(logrus.Fields{
+				"memory_limit":   humanReadableBytes(instance.config.MemoryLimit),
+				"check_interval": instance.config.MemoryCheckInterval,
+			}).Info("memory monitor started for 'all' parameter store mode")
+		}
+
 		// 如果是异步模式，启动OpChan处理
-		if instance.insertMode == AsyncMode {
+		if instance.config.InsertMode == AsyncMode {
 			go instance.StartOpChan()
 			instance.log.Info("start op chan with async mode")
 		} else {
@@ -103,31 +113,11 @@ func NewTraceInstance() *TraceInstance {
 
 // initTraceInstance 初始化 TraceInstance 实例
 func initTraceInstance() {
-	// 从环境变量获取忽略名称
-	ignoreEnv := os.Getenv(EnvIgnoreNames)
-	var ignoreNames []string
-	if ignoreEnv != "" {
-		ignoreNames = strings.Split(ignoreEnv, ",")
-	} else {
-		ignoreNames = strings.Split(IgnoreNames, ",")
-	}
-
 	// 初始化停止监控通道
 	stopMonitor = make(chan struct{})
 
-	// 获取配置的最大深度
-	maxDepth := DefaultMaxDepth
-	if maxDepthStr := os.Getenv(EnvMaxDepth); maxDepthStr != "" {
-		if count, err := strconv.Atoi(maxDepthStr); err == nil && count > 0 {
-			maxDepth = count
-		}
-	}
-
-	// 从环境变量获取数据库插入模式，默认为同步
-	insertMode := SyncMode
-	if modeStr := os.Getenv(EnvDBInsertMode); modeStr == AsyncMode {
-		insertMode = AsyncMode
-	}
+	// 创建配置实例
+	config := NewConfig()
 
 	// 创建 TraceInstance
 	instance = &TraceInstance{
@@ -135,20 +125,19 @@ func initTraceInstance() {
 		log:              initializeLogger(),
 		closed:           false,
 		GoroutineRunning: make(map[uint64]*GoroutineInfo),
-		paramCache:       make(map[string]*receiverInfo),
-		IgnoreNames:      ignoreNames,
 		OpChan:           make(chan *DataOp, 50),
 		dataClose:        make(chan struct{}),
-		insertMode:       insertMode,
-
-		spewConfig: &spew.ConfigState{
-			MaxDepth:          maxDepth + 1, // 从业务角度，需要多一层
-			DisableCapacities: true,
-			EnableJSONOutput:  true,
-			DisableMethods:    true,
-			SkipNilValues:     true,
-		},
+		config:           config,
 	}
+
+	// 初始化内存监控器
+	instance.memoryMonitor = NewMemoryMonitor(
+		config.MemoryLimit,
+		time.Duration(config.MemoryCheckInterval)*time.Second,
+		instance.log,
+	)
+	// 设置spew配置
+	instance.SetSpewConfig()
 }
 
 func (t *TraceInstance) StartOpChan() {
@@ -275,8 +264,14 @@ func (t *TraceInstance) Close() error {
 	// 发送停止监控信号
 	close(stopMonitor)
 
+	// 停止内存监控器
+	if t.memoryMonitor != nil && t.memoryMonitor.IsEnabled() {
+		t.memoryMonitor.Stop()
+		t.log.Info("memory monitor stopped")
+	}
+
 	// 如果是异步模式，关闭OpChan
-	if t.insertMode == AsyncMode {
+	if t.config.InsertMode == AsyncMode {
 		close(t.OpChan)
 		<-t.dataClose
 	}
@@ -287,15 +282,9 @@ func (t *TraceInstance) Close() error {
 
 // initDatabase 初始化数据库
 func initDatabase() error {
-	// 从环境变量获取数据库类型，默认使用 sqlite
-	dbType := os.Getenv(EnvDBType)
-	if dbType == "" {
-		dbType = "sqlite"
-	}
-
 	// 创建仓储工厂
 	var err error
-	repositoryFactory, err = factory.CreateRepositoryFactory(dbType, instance.log)
+	repositoryFactory, err = factory.CreateRepositoryFactory(instance.config.DBType, instance.log)
 	if err != nil {
 		return err
 	}
@@ -353,9 +342,34 @@ func (t *TraceInstance) updateTraceData(trace *model.TraceData) {
 
 func (t *TraceInstance) sendOp(op *DataOp) {
 	// 根据插入模式决定是同步执行还是通过通道异步执行
-	if t.insertMode == SyncMode {
+	if t.config.InsertMode == SyncMode {
 		t.executeOp(op)
 	} else {
 		t.OpChan <- op
 	}
+}
+
+// GetParamStoreMode 获取当前的参数存储模式
+func (t *TraceInstance) GetParamStoreMode() string {
+	return t.config.ParamStoreMode
+}
+
+// IsParamStoreEnabled 检查是否启用了参数存储
+func (t *TraceInstance) IsParamStoreEnabled() bool {
+	return t.config.ParamStoreMode != ParamStoreModeNone
+}
+
+// IsParamStoreAll 检查是否为全保存模式
+func (t *TraceInstance) IsParamStoreAll() bool {
+	return t.config.ParamStoreMode == ParamStoreModeAll
+}
+
+// GetIgnoreNames 获取忽略的函数名列表
+func (t *TraceInstance) GetIgnoreNames() []string {
+	return t.config.IgnoreNames
+}
+
+// GetSpewConfig 获取spew配置
+func (t *TraceInstance) SetSpewConfig() {
+	spew.SetGlobalConfig(t.config.CreateSpewConfig())
 }

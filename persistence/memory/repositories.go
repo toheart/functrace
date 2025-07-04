@@ -66,6 +66,36 @@ func (r *MemParamRepository) SaveParam(param *model.ParamStoreData) (int64, erro
 	return 1, nil
 }
 
+// SaveParamCache 保存参数缓存
+func (r *MemParamRepository) SaveParamCache(cache *model.ParamCache) (int64, error) {
+	r.logger.WithField("cache", cache).Info("Mock保存参数缓存")
+	return 1, nil
+}
+
+// FindParamCacheByAddr 根据地址查找参数缓存
+func (r *MemParamRepository) FindParamCacheByAddr(addr string) (*model.ParamCache, error) {
+	r.logger.WithField("addr", addr).Info("Mock查找参数缓存")
+	return &model.ParamCache{
+		ID:      1,
+		Addr:    addr,
+		TraceID: 1,
+		BaseID:  1,
+		Data:    "MockCacheData",
+	}, nil
+}
+
+// DeleteParamCacheByTraceID 根据跟踪ID删除参数缓存
+func (r *MemParamRepository) DeleteParamCacheByTraceID(traceId int64) error {
+	r.logger.WithField("traceId", traceId).Info("Mock删除参数缓存")
+	return nil
+}
+
+// UpdateParamCache 更新参数缓存
+func (r *MemParamRepository) UpdateParamCache(cache *model.ParamCache) error {
+	r.logger.WithField("cache", cache).Info("Mock更新参数缓存")
+	return nil
+}
+
 // MemGoroutineRepository 实现协程仓储的Mock
 type MemGoroutineRepository struct {
 	logger *logrus.Logger

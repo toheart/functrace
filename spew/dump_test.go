@@ -15,1028 +15,2092 @@
  */
 
 /*
-Test Summary:
-NOTE: For each test, a nil pointer, a single pointer and double pointer to the
-base test element are also tested to ensure proper indirection across all types.
+JSON Output Test Summary:
+This test suite validates the JSON output functionality for all Go data types:
 
-- Max int8, int16, int32, int64, int
-- Max uint8, uint16, uint32, uint64, uint
-- Boolean true and false
-- Standard complex64 and complex128
-- Array containing standard ints
-- Array containing type with custom formatter on pointer receiver only
-- Array containing interfaces
-- Array containing bytes
-- Slice containing standard float32 values
-- Slice containing type with custom formatter on pointer receiver only
-- Slice containing interfaces
-- Slice containing bytes
-- Nil slice
-- Standard string
-- Nil interface
-- Sub-interface
-- Map with string keys and int vals
-- Map with custom formatter type on pointer receiver only keys and vals
-- Map with interface keys and values
-- Map with nil interface value
-- Struct with primitives
-- Struct that contains another struct
-- Struct that contains custom type with Stringer pointer interface via both
-  exported and unexported fields
-- Struct that contains embedded struct and field to same struct
-- Uintptr to 0 (null pointer)
-- Uintptr address of real variable
-- Unsafe.Pointer to 0 (null pointer)
-- Unsafe.Pointer to address of real variable
-- Nil channel
-- Standard int channel
-- Function with no params and no returns
-- Function with param and no returns
-- Function with multiple params and multiple returns
-- Struct that is circular through self referencing
-- Structs that are circular through cross referencing
-- Structs that are indirectly circular
-- Type that panics in its Stringer interface
+- Basic types: int, uint, bool, float, complex, string
+- Composite types: array, slice, map, struct
+- Special types: pointer, interface, channel, function, uintptr
+- Edge cases: nil values, circular references, invalid types
+- Configuration options: SkipNilValues, MaxDepth
 */
 
-package spew_test
+package spew
 
 import (
-	"bytes"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unsafe"
 
-	"github.com/davecgh/go-spew/spew"
+	gspew "github.com/davecgh/go-spew/spew"
 )
 
-// dumpTest is used to describe a test to be performed against the Dump method.
-type dumpTest struct {
-	in    interface{}
-	wants []string
-}
+// TestBasicTypesJSON tests JSON output for basic Go types
+func TestBasicTypesJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var int8Var = int8(127)
+	var int16Var = int16(32767)
+	var int32Var = int32(2147483647)
+	var int64Var = int64(9223372036854775807)
+	var intVar = int(123)
 
-// dumpTests houses all of the tests to be performed against the Dump method.
-var dumpTests = make([]dumpTest, 0)
+	var uint8Var = uint8(255)
+	var uint16Var = uint16(65535)
+	var uint32Var = uint32(4294967295)
+	var uint64Var = uint64(18446744073709551615)
+	var uintVar = uint(456)
 
-// addDumpTest is a helper method to append the passed input and desired result
-// to dumpTests
-func addDumpTest(in interface{}, wants ...string) {
-	test := dumpTest{in, wants}
-	dumpTests = append(dumpTests, test)
-}
+	var float32Var = float32(3.14)
+	var float64Var = float64(2.718281828)
 
-func addIntDumpTests() {
-	// Max int8.
-	v := int8(127)
-	nv := (*int8)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "int8"
-	vs := "127"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
+	var boolTrueVar = true
+	var boolFalseVar = false
 
-	// Max int16.
-	v2 := int16(32767)
-	nv2 := (*int16)(nil)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "int16"
-	v2s := "32767"
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-	addDumpTest(nv2, "(*"+v2t+")(<nil>)\n")
+	var stringVar = "Hello, World!"
+	var emptyStringVar = ""
 
-	// Max int32.
-	v3 := int32(2147483647)
-	nv3 := (*int32)(nil)
-	pv3 := &v3
-	v3Addr := fmt.Sprintf("%p", pv3)
-	pv3Addr := fmt.Sprintf("%p", &pv3)
-	v3t := "int32"
-	v3s := "2147483647"
-	addDumpTest(v3, "("+v3t+") "+v3s+"\n")
-	addDumpTest(pv3, "(*"+v3t+")("+v3Addr+")("+v3s+")\n")
-	addDumpTest(&pv3, "(**"+v3t+")("+pv3Addr+"->"+v3Addr+")("+v3s+")\n")
-	addDumpTest(nv3, "(*"+v3t+")(<nil>)\n")
+	var complex64Var = complex64(1 + 2i)
+	var complex128Var = complex128(3 + 4i)
 
-	// Max int64.
-	v4 := int64(9223372036854775807)
-	nv4 := (*int64)(nil)
-	pv4 := &v4
-	v4Addr := fmt.Sprintf("%p", pv4)
-	pv4Addr := fmt.Sprintf("%p", &pv4)
-	v4t := "int64"
-	v4s := "9223372036854775807"
-	addDumpTest(v4, "("+v4t+") "+v4s+"\n")
-	addDumpTest(pv4, "(*"+v4t+")("+v4Addr+")("+v4s+")\n")
-	addDumpTest(&pv4, "(**"+v4t+")("+pv4Addr+"->"+v4Addr+")("+v4s+")\n")
-	addDumpTest(nv4, "(*"+v4t+")(<nil>)\n")
+	tests := []struct {
+		name     string
+		input    interface{}
+		expected interface{}
+	}{
+		// Integer types (JSON parses all numbers as float64)
+		{"int8", int8Var, float64(127)},
+		{"int16", int16Var, float64(32767)},
+		{"int32", int32Var, float64(2147483647)},
+		{"int64", int64Var, float64(9223372036854775807)},
+		{"int", intVar, float64(123)},
 
-	// Max int.
-	v5 := int(2147483647)
-	nv5 := (*int)(nil)
-	pv5 := &v5
-	v5Addr := fmt.Sprintf("%p", pv5)
-	pv5Addr := fmt.Sprintf("%p", &pv5)
-	v5t := "int"
-	v5s := "2147483647"
-	addDumpTest(v5, "("+v5t+") "+v5s+"\n")
-	addDumpTest(pv5, "(*"+v5t+")("+v5Addr+")("+v5s+")\n")
-	addDumpTest(&pv5, "(**"+v5t+")("+pv5Addr+"->"+v5Addr+")("+v5s+")\n")
-	addDumpTest(nv5, "(*"+v5t+")(<nil>)\n")
-}
+		// Unsigned integer types (JSON parses all numbers as float64)
+		{"uint8", uint8Var, float64(255)},
+		{"uint16", uint16Var, float64(65535)},
+		{"uint32", uint32Var, float64(4294967295)},
+		{"uint64", uint64Var, float64(18446744073709551615)},
+		{"uint", uintVar, float64(456)},
 
-func addUintDumpTests() {
-	// Max uint8.
-	v := uint8(255)
-	nv := (*uint8)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "uint8"
-	vs := "255"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
+		// Float types
+		{"float32", float32Var, nil}, // Special case - will check separately due to precision
+		{"float64", float64Var, float64(2.718281828)},
 
-	// Max uint16.
-	v2 := uint16(65535)
-	nv2 := (*uint16)(nil)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "uint16"
-	v2s := "65535"
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-	addDumpTest(nv2, "(*"+v2t+")(<nil>)\n")
+		// Boolean types
+		{"bool_true", boolTrueVar, true},
+		{"bool_false", boolFalseVar, false},
 
-	// Max uint32.
-	v3 := uint32(4294967295)
-	nv3 := (*uint32)(nil)
-	pv3 := &v3
-	v3Addr := fmt.Sprintf("%p", pv3)
-	pv3Addr := fmt.Sprintf("%p", &pv3)
-	v3t := "uint32"
-	v3s := "4294967295"
-	addDumpTest(v3, "("+v3t+") "+v3s+"\n")
-	addDumpTest(pv3, "(*"+v3t+")("+v3Addr+")("+v3s+")\n")
-	addDumpTest(&pv3, "(**"+v3t+")("+pv3Addr+"->"+v3Addr+")("+v3s+")\n")
-	addDumpTest(nv3, "(*"+v3t+")(<nil>)\n")
+		// String type
+		{"string", stringVar, "Hello, World!"},
+		{"empty_string", emptyStringVar, ""},
 
-	// Max uint64.
-	v4 := uint64(18446744073709551615)
-	nv4 := (*uint64)(nil)
-	pv4 := &v4
-	v4Addr := fmt.Sprintf("%p", pv4)
-	pv4Addr := fmt.Sprintf("%p", &pv4)
-	v4t := "uint64"
-	v4s := "18446744073709551615"
-	addDumpTest(v4, "("+v4t+") "+v4s+"\n")
-	addDumpTest(pv4, "(*"+v4t+")("+v4Addr+")("+v4s+")\n")
-	addDumpTest(&pv4, "(**"+v4t+")("+pv4Addr+"->"+v4Addr+")("+v4s+")\n")
-	addDumpTest(nv4, "(*"+v4t+")(<nil>)\n")
-
-	// Max uint.
-	v5 := uint(4294967295)
-	nv5 := (*uint)(nil)
-	pv5 := &v5
-	v5Addr := fmt.Sprintf("%p", pv5)
-	pv5Addr := fmt.Sprintf("%p", &pv5)
-	v5t := "uint"
-	v5s := "4294967295"
-	addDumpTest(v5, "("+v5t+") "+v5s+"\n")
-	addDumpTest(pv5, "(*"+v5t+")("+v5Addr+")("+v5s+")\n")
-	addDumpTest(&pv5, "(**"+v5t+")("+pv5Addr+"->"+v5Addr+")("+v5s+")\n")
-	addDumpTest(nv5, "(*"+v5t+")(<nil>)\n")
-}
-
-func addBoolDumpTests() {
-	// Boolean true.
-	v := bool(true)
-	nv := (*bool)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "bool"
-	vs := "true"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
-
-	// Boolean false.
-	v2 := bool(false)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "bool"
-	v2s := "false"
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-}
-
-func addFloatDumpTests() {
-	// Standard float32.
-	v := float32(3.1415)
-	nv := (*float32)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "float32"
-	vs := "3.1415"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
-
-	// Standard float64.
-	v2 := float64(3.1415926)
-	nv2 := (*float64)(nil)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "float64"
-	v2s := "3.1415926"
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-	addDumpTest(nv2, "(*"+v2t+")(<nil>)\n")
-}
-
-func addComplexDumpTests() {
-	// Standard complex64.
-	v := complex(float32(6), -2)
-	nv := (*complex64)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "complex64"
-	vs := "(6-2i)"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
-
-	// Standard complex128.
-	v2 := complex(float64(-6), 2)
-	nv2 := (*complex128)(nil)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "complex128"
-	v2s := "(-6+2i)"
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-	addDumpTest(nv2, "(*"+v2t+")(<nil>)\n")
-}
-
-func addArrayDumpTests() {
-	// Array containing standard ints.
-	v := [3]int{1, 2, 3}
-	vLen := fmt.Sprintf("%d", len(v))
-	vCap := fmt.Sprintf("%d", cap(v))
-	nv := (*[3]int)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "int"
-	vs := "(len=" + vLen + " cap=" + vCap + ") {\n (" + vt + ") 1,\n (" +
-		vt + ") 2,\n (" + vt + ") 3\n}"
-	addDumpTest(v, "([3]"+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*[3]"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**[3]"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*[3]"+vt+")(<nil>)\n")
-
-	// Array containing type with custom formatter on pointer receiver only.
-	v2i0 := pstringer("1")
-	v2i1 := pstringer("2")
-	v2i2 := pstringer("3")
-	v2 := [3]pstringer{v2i0, v2i1, v2i2}
-	v2i0Len := fmt.Sprintf("%d", len(v2i0))
-	v2i1Len := fmt.Sprintf("%d", len(v2i1))
-	v2i2Len := fmt.Sprintf("%d", len(v2i2))
-	v2Len := fmt.Sprintf("%d", len(v2))
-	v2Cap := fmt.Sprintf("%d", cap(v2))
-	nv2 := (*[3]pstringer)(nil)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "spew_test.pstringer"
-	v2sp := "(len=" + v2Len + " cap=" + v2Cap + ") {\n (" + v2t +
-		") (len=" + v2i0Len + ") stringer 1,\n (" + v2t +
-		") (len=" + v2i1Len + ") stringer 2,\n (" + v2t +
-		") (len=" + v2i2Len + ") " + "stringer 3\n}"
-	v2s := v2sp
-	if spew.UnsafeDisabled {
-		v2s = "(len=" + v2Len + " cap=" + v2Cap + ") {\n (" + v2t +
-			") (len=" + v2i0Len + ") \"1\",\n (" + v2t + ") (len=" +
-			v2i1Len + ") \"2\",\n (" + v2t + ") (len=" + v2i2Len +
-			") " + "\"3\"\n}"
+		// Complex types (converted to string in JSON)
+		{"complex64", complex64Var, "(1+2i)"},
+		{"complex128", complex128Var, "(3+4i)"},
 	}
-	addDumpTest(v2, "([3]"+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*[3]"+v2t+")("+v2Addr+")("+v2sp+")\n")
-	addDumpTest(&pv2, "(**[3]"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2sp+")\n")
-	addDumpTest(nv2, "(*[3]"+v2t+")(<nil>)\n")
 
-	// Array containing interfaces.
-	v3i0 := "one"
-	v3 := [3]interface{}{v3i0, int(2), uint(3)}
-	v3i0Len := fmt.Sprintf("%d", len(v3i0))
-	v3Len := fmt.Sprintf("%d", len(v3))
-	v3Cap := fmt.Sprintf("%d", cap(v3))
-	nv3 := (*[3]interface{})(nil)
-	pv3 := &v3
-	v3Addr := fmt.Sprintf("%p", pv3)
-	pv3Addr := fmt.Sprintf("%p", &pv3)
-	v3t := "[3]interface {}"
-	v3t2 := "string"
-	v3t3 := "int"
-	v3t4 := "uint"
-	v3s := "(len=" + v3Len + " cap=" + v3Cap + ") {\n (" + v3t2 + ") " +
-		"(len=" + v3i0Len + ") \"one\",\n (" + v3t3 + ") 2,\n (" +
-		v3t4 + ") 3\n}"
-	addDumpTest(v3, "("+v3t+") "+v3s+"\n")
-	addDumpTest(pv3, "(*"+v3t+")("+v3Addr+")("+v3s+")\n")
-	addDumpTest(&pv3, "(**"+v3t+")("+pv3Addr+"->"+v3Addr+")("+v3s+")\n")
-	addDumpTest(nv3, "(*"+v3t+")(<nil>)\n")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
 
-	// Array containing bytes.
-	v4 := [34]byte{
-		0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-		0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
-		0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
-		0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30,
-		0x31, 0x32,
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestBasicTypesJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// Check that it contains a value field
+			value, exists := parsed["value"]
+			if !exists {
+				t.Errorf("TestBasicTypesJSON[%s] missing 'value' field", tt.name)
+				return
+			}
+
+			// Special handling for float32 due to precision issues
+			if tt.name == "float32" {
+				if floatVal, ok := value.(float64); ok {
+					expectedFloat32 := float64(float32(3.14)) // Convert through float32 to get the same precision
+					if abs(floatVal-expectedFloat32) > 1e-6 {
+						t.Errorf("TestBasicTypesJSON[%s] float32 precision issue\nexpected: %v\nactual: %v",
+							tt.name, expectedFloat32, floatVal)
+					}
+				} else {
+					t.Errorf("TestBasicTypesJSON[%s] expected float64, got %T", tt.name, value)
+				}
+				return
+			}
+
+			// Verify the value matches expected for other types
+			if value != tt.expected {
+				t.Errorf("TestBasicTypesJSON[%s]\nexpected value: %v (%T)\nactual value:   %v (%T)",
+					tt.name, tt.expected, tt.expected, value, value)
+			}
+		})
 	}
-	v4Len := fmt.Sprintf("%d", len(v4))
-	v4Cap := fmt.Sprintf("%d", cap(v4))
-	nv4 := (*[34]byte)(nil)
-	pv4 := &v4
-	v4Addr := fmt.Sprintf("%p", pv4)
-	pv4Addr := fmt.Sprintf("%p", &pv4)
-	v4t := "[34]uint8"
-	v4s := "(len=" + v4Len + " cap=" + v4Cap + ") " +
-		"{\n 00000000  11 12 13 14 15 16 17 18  19 1a 1b 1c 1d 1e 1f 20" +
-		"  |............... |\n" +
-		" 00000010  21 22 23 24 25 26 27 28  29 2a 2b 2c 2d 2e 2f 30" +
-		"  |!\"#$%&'()*+,-./0|\n" +
-		" 00000020  31 32                                           " +
-		"  |12|\n}"
-	addDumpTest(v4, "("+v4t+") "+v4s+"\n")
-	addDumpTest(pv4, "(*"+v4t+")("+v4Addr+")("+v4s+")\n")
-	addDumpTest(&pv4, "(**"+v4t+")("+pv4Addr+"->"+v4Addr+")("+v4s+")\n")
-	addDumpTest(nv4, "(*"+v4t+")(<nil>)\n")
 }
 
-func addSliceDumpTests() {
-	// Slice containing standard float32 values.
-	v := []float32{3.14, 6.28, 12.56}
-	vLen := fmt.Sprintf("%d", len(v))
-	vCap := fmt.Sprintf("%d", cap(v))
-	nv := (*[]float32)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "float32"
-	vs := "(len=" + vLen + " cap=" + vCap + ") {\n (" + vt + ") 3.14,\n (" +
-		vt + ") 6.28,\n (" + vt + ") 12.56\n}"
-	addDumpTest(v, "([]"+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*[]"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**[]"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*[]"+vt+")(<nil>)\n")
-
-	// Slice containing type with custom formatter on pointer receiver only.
-	v2i0 := pstringer("1")
-	v2i1 := pstringer("2")
-	v2i2 := pstringer("3")
-	v2 := []pstringer{v2i0, v2i1, v2i2}
-	v2i0Len := fmt.Sprintf("%d", len(v2i0))
-	v2i1Len := fmt.Sprintf("%d", len(v2i1))
-	v2i2Len := fmt.Sprintf("%d", len(v2i2))
-	v2Len := fmt.Sprintf("%d", len(v2))
-	v2Cap := fmt.Sprintf("%d", cap(v2))
-	nv2 := (*[]pstringer)(nil)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "spew_test.pstringer"
-	v2s := "(len=" + v2Len + " cap=" + v2Cap + ") {\n (" + v2t + ") (len=" +
-		v2i0Len + ") stringer 1,\n (" + v2t + ") (len=" + v2i1Len +
-		") stringer 2,\n (" + v2t + ") (len=" + v2i2Len + ") " +
-		"stringer 3\n}"
-	addDumpTest(v2, "([]"+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*[]"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**[]"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-	addDumpTest(nv2, "(*[]"+v2t+")(<nil>)\n")
-
-	// Slice containing interfaces.
-	v3i0 := "one"
-	v3 := []interface{}{v3i0, int(2), uint(3), nil}
-	v3i0Len := fmt.Sprintf("%d", len(v3i0))
-	v3Len := fmt.Sprintf("%d", len(v3))
-	v3Cap := fmt.Sprintf("%d", cap(v3))
-	nv3 := (*[]interface{})(nil)
-	pv3 := &v3
-	v3Addr := fmt.Sprintf("%p", pv3)
-	pv3Addr := fmt.Sprintf("%p", &pv3)
-	v3t := "[]interface {}"
-	v3t2 := "string"
-	v3t3 := "int"
-	v3t4 := "uint"
-	v3t5 := "interface {}"
-	v3s := "(len=" + v3Len + " cap=" + v3Cap + ") {\n (" + v3t2 + ") " +
-		"(len=" + v3i0Len + ") \"one\",\n (" + v3t3 + ") 2,\n (" +
-		v3t4 + ") 3,\n (" + v3t5 + ") <nil>\n}"
-	addDumpTest(v3, "("+v3t+") "+v3s+"\n")
-	addDumpTest(pv3, "(*"+v3t+")("+v3Addr+")("+v3s+")\n")
-	addDumpTest(&pv3, "(**"+v3t+")("+pv3Addr+"->"+v3Addr+")("+v3s+")\n")
-	addDumpTest(nv3, "(*"+v3t+")(<nil>)\n")
-
-	// Slice containing bytes.
-	v4 := []byte{
-		0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-		0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
-		0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
-		0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30,
-		0x31, 0x32,
+// abs returns the absolute value of a float64
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
 	}
-	v4Len := fmt.Sprintf("%d", len(v4))
-	v4Cap := fmt.Sprintf("%d", cap(v4))
-	nv4 := (*[]byte)(nil)
-	pv4 := &v4
-	v4Addr := fmt.Sprintf("%p", pv4)
-	pv4Addr := fmt.Sprintf("%p", &pv4)
-	v4t := "[]uint8"
-	v4s := "(len=" + v4Len + " cap=" + v4Cap + ") " +
-		"{\n 00000000  11 12 13 14 15 16 17 18  19 1a 1b 1c 1d 1e 1f 20" +
-		"  |............... |\n" +
-		" 00000010  21 22 23 24 25 26 27 28  29 2a 2b 2c 2d 2e 2f 30" +
-		"  |!\"#$%&'()*+,-./0|\n" +
-		" 00000020  31 32                                           " +
-		"  |12|\n}"
-	addDumpTest(v4, "("+v4t+") "+v4s+"\n")
-	addDumpTest(pv4, "(*"+v4t+")("+v4Addr+")("+v4s+")\n")
-	addDumpTest(&pv4, "(**"+v4t+")("+pv4Addr+"->"+v4Addr+")("+v4s+")\n")
-	addDumpTest(nv4, "(*"+v4t+")(<nil>)\n")
-
-	// Nil slice.
-	v5 := []int(nil)
-	nv5 := (*[]int)(nil)
-	pv5 := &v5
-	v5Addr := fmt.Sprintf("%p", pv5)
-	pv5Addr := fmt.Sprintf("%p", &pv5)
-	v5t := "[]int"
-	v5s := "<nil>"
-	addDumpTest(v5, "("+v5t+") "+v5s+"\n")
-	addDumpTest(pv5, "(*"+v5t+")("+v5Addr+")("+v5s+")\n")
-	addDumpTest(&pv5, "(**"+v5t+")("+pv5Addr+"->"+v5Addr+")("+v5s+")\n")
-	addDumpTest(nv5, "(*"+v5t+")(<nil>)\n")
+	return x
 }
 
-func addStringDumpTests() {
-	// Standard string.
-	v := "test"
-	vLen := fmt.Sprintf("%d", len(v))
-	nv := (*string)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "string"
-	vs := "(len=" + vLen + ") \"test\""
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
-}
+// TestArraySliceJSON tests JSON output for arrays and slices
+func TestArraySliceJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var arrayInt = [3]int{1, 2, 3}
+	var arrayString = [2]string{"hello", "world"}
+	var emptyArray = [0]int{}
 
-func addInterfaceDumpTests() {
-	// Nil interface.
-	var v interface{}
-	nv := (*interface{})(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "interface {}"
-	vs := "<nil>"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
+	var sliceInt = []int{10, 20, 30}
+	var sliceString = []string{"foo", "bar"}
+	var emptySlice = []int{}
+	var nilSlice []int = nil
 
-	// Sub-interface.
-	v2 := interface{}(uint16(65535))
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "uint16"
-	v2s := "65535"
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-}
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		// Arrays
+		{"array_int", arrayInt},
+		{"array_string", arrayString},
+		{"empty_array", emptyArray},
 
-func addMapDumpTests() {
-	// Map with string keys and int vals.
-	k := "one"
-	kk := "two"
-	m := map[string]int{k: 1, kk: 2}
-	klen := fmt.Sprintf("%d", len(k)) // not kLen to shut golint up
-	kkLen := fmt.Sprintf("%d", len(kk))
-	mLen := fmt.Sprintf("%d", len(m))
-	nilMap := map[string]int(nil)
-	nm := (*map[string]int)(nil)
-	pm := &m
-	mAddr := fmt.Sprintf("%p", pm)
-	pmAddr := fmt.Sprintf("%p", &pm)
-	mt := "map[string]int"
-	mt1 := "string"
-	mt2 := "int"
-	ms := "(len=" + mLen + ") {\n (" + mt1 + ") (len=" + klen + ") " +
-		"\"one\": (" + mt2 + ") 1,\n (" + mt1 + ") (len=" + kkLen +
-		") \"two\": (" + mt2 + ") 2\n}"
-	ms2 := "(len=" + mLen + ") {\n (" + mt1 + ") (len=" + kkLen + ") " +
-		"\"two\": (" + mt2 + ") 2,\n (" + mt1 + ") (len=" + klen +
-		") \"one\": (" + mt2 + ") 1\n}"
-	addDumpTest(m, "("+mt+") "+ms+"\n", "("+mt+") "+ms2+"\n")
-	addDumpTest(pm, "(*"+mt+")("+mAddr+")("+ms+")\n",
-		"(*"+mt+")("+mAddr+")("+ms2+")\n")
-	addDumpTest(&pm, "(**"+mt+")("+pmAddr+"->"+mAddr+")("+ms+")\n",
-		"(**"+mt+")("+pmAddr+"->"+mAddr+")("+ms2+")\n")
-	addDumpTest(nm, "(*"+mt+")(<nil>)\n")
-	addDumpTest(nilMap, "("+mt+") <nil>\n")
-
-	// Map with custom formatter type on pointer receiver only keys and vals.
-	k2 := pstringer("one")
-	v2 := pstringer("1")
-	m2 := map[pstringer]pstringer{k2: v2}
-	k2Len := fmt.Sprintf("%d", len(k2))
-	v2Len := fmt.Sprintf("%d", len(v2))
-	m2Len := fmt.Sprintf("%d", len(m2))
-	nilMap2 := map[pstringer]pstringer(nil)
-	nm2 := (*map[pstringer]pstringer)(nil)
-	pm2 := &m2
-	m2Addr := fmt.Sprintf("%p", pm2)
-	pm2Addr := fmt.Sprintf("%p", &pm2)
-	m2t := "map[spew_test.pstringer]spew_test.pstringer"
-	m2t1 := "spew_test.pstringer"
-	m2t2 := "spew_test.pstringer"
-	m2s := "(len=" + m2Len + ") {\n (" + m2t1 + ") (len=" + k2Len + ") " +
-		"stringer one: (" + m2t2 + ") (len=" + v2Len + ") stringer 1\n}"
-	if spew.UnsafeDisabled {
-		m2s = "(len=" + m2Len + ") {\n (" + m2t1 + ") (len=" + k2Len +
-			") " + "\"one\": (" + m2t2 + ") (len=" + v2Len +
-			") \"1\"\n}"
+		// Slices
+		{"slice_int", sliceInt},
+		{"slice_string", sliceString},
+		{"empty_slice", emptySlice},
+		{"nil_slice", nilSlice},
 	}
-	addDumpTest(m2, "("+m2t+") "+m2s+"\n")
-	addDumpTest(pm2, "(*"+m2t+")("+m2Addr+")("+m2s+")\n")
-	addDumpTest(&pm2, "(**"+m2t+")("+pm2Addr+"->"+m2Addr+")("+m2s+")\n")
-	addDumpTest(nm2, "(*"+m2t+")(<nil>)\n")
-	addDumpTest(nilMap2, "("+m2t+") <nil>\n")
 
-	// Map with interface keys and values.
-	k3 := "one"
-	k3Len := fmt.Sprintf("%d", len(k3))
-	m3 := map[interface{}]interface{}{k3: 1}
-	m3Len := fmt.Sprintf("%d", len(m3))
-	nilMap3 := map[interface{}]interface{}(nil)
-	nm3 := (*map[interface{}]interface{})(nil)
-	pm3 := &m3
-	m3Addr := fmt.Sprintf("%p", pm3)
-	pm3Addr := fmt.Sprintf("%p", &pm3)
-	m3t := "map[interface {}]interface {}"
-	m3t1 := "string"
-	m3t2 := "int"
-	m3s := "(len=" + m3Len + ") {\n (" + m3t1 + ") (len=" + k3Len + ") " +
-		"\"one\": (" + m3t2 + ") 1\n}"
-	addDumpTest(m3, "("+m3t+") "+m3s+"\n")
-	addDumpTest(pm3, "(*"+m3t+")("+m3Addr+")("+m3s+")\n")
-	addDumpTest(&pm3, "(**"+m3t+")("+pm3Addr+"->"+m3Addr+")("+m3s+")\n")
-	addDumpTest(nm3, "(*"+m3t+")(<nil>)\n")
-	addDumpTest(nilMap3, "("+m3t+") <nil>\n")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
 
-	// Map with nil interface value.
-	k4 := "nil"
-	k4Len := fmt.Sprintf("%d", len(k4))
-	m4 := map[string]interface{}{k4: nil}
-	m4Len := fmt.Sprintf("%d", len(m4))
-	nilMap4 := map[string]interface{}(nil)
-	nm4 := (*map[string]interface{})(nil)
-	pm4 := &m4
-	m4Addr := fmt.Sprintf("%p", pm4)
-	pm4Addr := fmt.Sprintf("%p", &pm4)
-	m4t := "map[string]interface {}"
-	m4t1 := "string"
-	m4t2 := "interface {}"
-	m4s := "(len=" + m4Len + ") {\n (" + m4t1 + ") (len=" + k4Len + ")" +
-		" \"nil\": (" + m4t2 + ") <nil>\n}"
-	addDumpTest(m4, "("+m4t+") "+m4s+"\n")
-	addDumpTest(pm4, "(*"+m4t+")("+m4Addr+")("+m4s+")\n")
-	addDumpTest(&pm4, "(**"+m4t+")("+pm4Addr+"->"+m4Addr+")("+m4s+")\n")
-	addDumpTest(nm4, "(*"+m4t+")(<nil>)\n")
-	addDumpTest(nilMap4, "("+m4t+") <nil>\n")
-}
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestArraySliceJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
 
-func addStructDumpTests() {
-	// Struct with primitives.
-	type s1 struct {
-		a int8
-		b uint8
+			// Check if it contains the expected value structure
+			if tt.input == nil {
+				if parsed["value"] != nil {
+					t.Errorf("TestArraySliceJSON[%s] expected null value, got: %v", tt.name, parsed["value"])
+				}
+			} else {
+				// For non-nil values, should have some representation
+				if _, exists := parsed["value"]; !exists {
+					t.Errorf("TestArraySliceJSON[%s] missing 'value' field", tt.name)
+				}
+			}
+		})
 	}
-	v := s1{127, 255}
-	nv := (*s1)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "spew_test.s1"
-	vt2 := "int8"
-	vt3 := "uint8"
-	vs := "{\n a: (" + vt2 + ") 127,\n b: (" + vt3 + ") 255\n}"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
+}
 
-	// Struct that contains another struct.
-	type s2 struct {
-		s1 s1
-		b  bool
+// TestMapJSON tests JSON output for maps
+func TestMapJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var mapStringInt = map[string]int{"one": 1, "two": 2}
+	var mapIntString = map[int]string{1: "one", 2: "two"}
+	var emptyMap = map[string]int{}
+	var nilMap map[string]int = nil
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"map_string_int", mapStringInt},
+		{"map_int_string", mapIntString},
+		{"empty_map", emptyMap},
+		{"nil_map", nilMap},
 	}
-	v2 := s2{s1{127, 255}, true}
-	nv2 := (*s2)(nil)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "spew_test.s2"
-	v2t2 := "spew_test.s1"
-	v2t3 := "int8"
-	v2t4 := "uint8"
-	v2t5 := "bool"
-	v2s := "{\n s1: (" + v2t2 + ") {\n  a: (" + v2t3 + ") 127,\n  b: (" +
-		v2t4 + ") 255\n },\n b: (" + v2t5 + ") true\n}"
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-	addDumpTest(nv2, "(*"+v2t+")(<nil>)\n")
 
-	// Struct that contains custom type with Stringer pointer interface via both
-	// exported and unexported fields.
-	type s3 struct {
-		s pstringer
-		S pstringer
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestMapJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// Check basic structure
+			if tt.input == nil {
+				if parsed["value"] != nil {
+					t.Errorf("TestMapJSON[%s] expected null value for nil map", tt.name)
+				}
+			} else {
+				if _, exists := parsed["value"]; !exists {
+					t.Errorf("TestMapJSON[%s] missing 'value' field", tt.name)
+				}
+			}
+		})
 	}
-	v3 := s3{"test", "test2"}
-	nv3 := (*s3)(nil)
-	pv3 := &v3
-	v3Addr := fmt.Sprintf("%p", pv3)
-	pv3Addr := fmt.Sprintf("%p", &pv3)
-	v3t := "spew_test.s3"
-	v3t2 := "spew_test.pstringer"
-	v3s := "{\n s: (" + v3t2 + ") (len=4) stringer test,\n S: (" + v3t2 +
-		") (len=5) stringer test2\n}"
-	v3sp := v3s
-	if spew.UnsafeDisabled {
-		v3s = "{\n s: (" + v3t2 + ") (len=4) \"test\",\n S: (" +
-			v3t2 + ") (len=5) \"test2\"\n}"
-		v3sp = "{\n s: (" + v3t2 + ") (len=4) \"test\",\n S: (" +
-			v3t2 + ") (len=5) stringer test2\n}"
+}
+
+// TestStructJSON tests JSON output for structs
+func TestStructJSON(t *testing.T) {
+	type Person struct {
+		Name string
+		Age  int
 	}
-	addDumpTest(v3, "("+v3t+") "+v3s+"\n")
-	addDumpTest(pv3, "(*"+v3t+")("+v3Addr+")("+v3sp+")\n")
-	addDumpTest(&pv3, "(**"+v3t+")("+pv3Addr+"->"+v3Addr+")("+v3sp+")\n")
-	addDumpTest(nv3, "(*"+v3t+")(<nil>)\n")
 
-	// Struct that contains embedded struct and field to same struct.
-	e := embed{"embedstr"}
-	eLen := fmt.Sprintf("%d", len("embedstr"))
-	v4 := embedwrap{embed: &e, e: &e}
-	nv4 := (*embedwrap)(nil)
-	pv4 := &v4
-	eAddr := fmt.Sprintf("%p", &e)
-	v4Addr := fmt.Sprintf("%p", pv4)
-	pv4Addr := fmt.Sprintf("%p", &pv4)
-	v4t := "spew_test.embedwrap"
-	v4t2 := "spew_test.embed"
-	v4t3 := "string"
-	v4s := "{\n embed: (*" + v4t2 + ")(" + eAddr + ")({\n  a: (" + v4t3 +
-		") (len=" + eLen + ") \"embedstr\"\n }),\n e: (*" + v4t2 +
-		")(" + eAddr + ")({\n  a: (" + v4t3 + ") (len=" + eLen + ")" +
-		" \"embedstr\"\n })\n}"
-	addDumpTest(v4, "("+v4t+") "+v4s+"\n")
-	addDumpTest(pv4, "(*"+v4t+")("+v4Addr+")("+v4s+")\n")
-	addDumpTest(&pv4, "(**"+v4t+")("+pv4Addr+"->"+v4Addr+")("+v4s+")\n")
-	addDumpTest(nv4, "(*"+v4t+")(<nil>)\n")
-}
-
-func addUintptrDumpTests() {
-	// Null pointer.
-	v := uintptr(0)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "uintptr"
-	vs := "<nil>"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-
-	// Address of real variable.
-	i := 1
-	v2 := uintptr(unsafe.Pointer(&i))
-	nv2 := (*uintptr)(nil)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "uintptr"
-	v2s := fmt.Sprintf("%p", &i)
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-	addDumpTest(nv2, "(*"+v2t+")(<nil>)\n")
-}
-
-func addUnsafePointerDumpTests() {
-	// Null pointer.
-	v := unsafe.Pointer(nil)
-	nv := (*unsafe.Pointer)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "unsafe.Pointer"
-	vs := "<nil>"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
-
-	// Address of real variable.
-	i := 1
-	v2 := unsafe.Pointer(&i)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "unsafe.Pointer"
-	v2s := fmt.Sprintf("%p", &i)
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
-}
-
-func addChanDumpTests() {
-	// Nil channel.
-	var v chan int
-	pv := &v
-	nv := (*chan int)(nil)
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "chan int"
-	vs := "<nil>"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
-
-	// Real channel.
-	v2 := make(chan int)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "chan int"
-	v2s := fmt.Sprintf("%p", v2)
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-}
-
-func addFuncDumpTests() {
-	// Function with no params and no returns.
-	v := addIntDumpTests
-	nv := (*func())(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "func()"
-	vs := fmt.Sprintf("%p", v)
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
-
-	// Function with param and no returns.
-	v2 := TestDump
-	nv2 := (*func(*testing.T))(nil)
-	pv2 := &v2
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "func(*testing.T)"
-	v2s := fmt.Sprintf("%p", v2)
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s+")\n")
-	addDumpTest(nv2, "(*"+v2t+")(<nil>)\n")
-
-	// Function with multiple params and multiple returns.
-	var v3 = func(i int, s string) (b bool, err error) {
-		return true, nil
+	type Company struct {
+		Name      string
+		Employees []Person
 	}
-	nv3 := (*func(int, string) (bool, error))(nil)
-	pv3 := &v3
-	v3Addr := fmt.Sprintf("%p", pv3)
-	pv3Addr := fmt.Sprintf("%p", &pv3)
-	v3t := "func(int, string) (bool, error)"
-	v3s := fmt.Sprintf("%p", v3)
-	addDumpTest(v3, "("+v3t+") "+v3s+"\n")
-	addDumpTest(pv3, "(*"+v3t+")("+v3Addr+")("+v3s+")\n")
-	addDumpTest(&pv3, "(**"+v3t+")("+pv3Addr+"->"+v3Addr+")("+v3s+")\n")
-	addDumpTest(nv3, "(*"+v3t+")(<nil>)\n")
-}
 
-func addCircularDumpTests() {
-	// Struct that is circular through self referencing.
-	type circular struct {
-		c *circular
+	// 使用变量而不是常量
+	var simplePerson = Person{Name: "John", Age: 30}
+	var nestedCompany = Company{
+		Name: "Tech Corp",
+		Employees: []Person{
+			{Name: "Alice", Age: 25},
+			{Name: "Bob", Age: 35},
+		},
 	}
-	v := circular{nil}
-	v.c = &v
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "spew_test.circular"
-	vs := "{\n c: (*" + vt + ")(" + vAddr + ")({\n  c: (*" + vt + ")(" +
-		vAddr + ")(<already shown>)\n })\n}"
-	vs2 := "{\n c: (*" + vt + ")(" + vAddr + ")(<already shown>)\n}"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs2+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs2+")\n")
+	var emptyStruct = struct{}{}
 
-	// Structs that are circular through cross referencing.
-	v2 := xref1{nil}
-	ts2 := xref2{&v2}
-	v2.ps2 = &ts2
-	pv2 := &v2
-	ts2Addr := fmt.Sprintf("%p", &ts2)
-	v2Addr := fmt.Sprintf("%p", pv2)
-	pv2Addr := fmt.Sprintf("%p", &pv2)
-	v2t := "spew_test.xref1"
-	v2t2 := "spew_test.xref2"
-	v2s := "{\n ps2: (*" + v2t2 + ")(" + ts2Addr + ")({\n  ps1: (*" + v2t +
-		")(" + v2Addr + ")({\n   ps2: (*" + v2t2 + ")(" + ts2Addr +
-		")(<already shown>)\n  })\n })\n}"
-	v2s2 := "{\n ps2: (*" + v2t2 + ")(" + ts2Addr + ")({\n  ps1: (*" + v2t +
-		")(" + v2Addr + ")(<already shown>)\n })\n}"
-	addDumpTest(v2, "("+v2t+") "+v2s+"\n")
-	addDumpTest(pv2, "(*"+v2t+")("+v2Addr+")("+v2s2+")\n")
-	addDumpTest(&pv2, "(**"+v2t+")("+pv2Addr+"->"+v2Addr+")("+v2s2+")\n")
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"simple_struct", simplePerson},
+		{"nested_struct", nestedCompany},
+		{"empty_struct", emptyStruct},
+	}
 
-	// Structs that are indirectly circular.
-	v3 := indirCir1{nil}
-	tic2 := indirCir2{nil}
-	tic3 := indirCir3{&v3}
-	tic2.ps3 = &tic3
-	v3.ps2 = &tic2
-	pv3 := &v3
-	tic2Addr := fmt.Sprintf("%p", &tic2)
-	tic3Addr := fmt.Sprintf("%p", &tic3)
-	v3Addr := fmt.Sprintf("%p", pv3)
-	pv3Addr := fmt.Sprintf("%p", &pv3)
-	v3t := "spew_test.indirCir1"
-	v3t2 := "spew_test.indirCir2"
-	v3t3 := "spew_test.indirCir3"
-	v3s := "{\n ps2: (*" + v3t2 + ")(" + tic2Addr + ")({\n  ps3: (*" + v3t3 +
-		")(" + tic3Addr + ")({\n   ps1: (*" + v3t + ")(" + v3Addr +
-		")({\n    ps2: (*" + v3t2 + ")(" + tic2Addr +
-		")(<already shown>)\n   })\n  })\n })\n}"
-	v3s2 := "{\n ps2: (*" + v3t2 + ")(" + tic2Addr + ")({\n  ps3: (*" + v3t3 +
-		")(" + tic3Addr + ")({\n   ps1: (*" + v3t + ")(" + v3Addr +
-		")(<already shown>)\n  })\n })\n}"
-	addDumpTest(v3, "("+v3t+") "+v3s+"\n")
-	addDumpTest(pv3, "(*"+v3t+")("+v3Addr+")("+v3s2+")\n")
-	addDumpTest(&pv3, "(**"+v3t+")("+pv3Addr+"->"+v3Addr+")("+v3s2+")\n")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestStructJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// Check that struct has type information
+			if parsed["value"] == nil {
+				t.Errorf("TestStructJSON[%s] expected non-null value", tt.name)
+			}
+		})
+	}
 }
 
-func addPanicDumpTests() {
-	// Type that panics in its Stringer interface.
-	v := panicer(127)
-	nv := (*panicer)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "spew_test.panicer"
-	vs := "(PANIC=test panic)127"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
+// TestPointerJSON tests JSON output for pointers
+func TestPointerJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var value = 42
+	var nilPtr *int = nil
+	var ptrToPtr = &nilPtr
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"pointer_to_int", &value},
+		{"nil_pointer", nilPtr},
+		{"pointer_to_pointer", ptrToPtr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestPointerJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
 }
 
-func addErrorDumpTests() {
-	// Type that has a custom Error interface.
-	v := customError(127)
-	nv := (*customError)(nil)
-	pv := &v
-	vAddr := fmt.Sprintf("%p", pv)
-	pvAddr := fmt.Sprintf("%p", &pv)
-	vt := "spew_test.customError"
-	vs := "error: 127"
-	addDumpTest(v, "("+vt+") "+vs+"\n")
-	addDumpTest(pv, "(*"+vt+")("+vAddr+")("+vs+")\n")
-	addDumpTest(&pv, "(**"+vt+")("+pvAddr+"->"+vAddr+")("+vs+")\n")
-	addDumpTest(nv, "(*"+vt+")(<nil>)\n")
+// TestInterfaceJSON tests JSON output for interfaces
+func TestInterfaceJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var nilInterface interface{} = nil
+	var stringInterface interface{} = "hello"
+	var intInterface interface{} = 123
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"nil_interface", nilInterface},
+		{"string_interface", stringInterface},
+		{"int_interface", intInterface},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestInterfaceJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
 }
 
-// TestDump executes all of the tests described by dumpTests.
-func TestDump(t *testing.T) {
-	// Setup tests.
-	addIntDumpTests()
-	addUintDumpTests()
-	addBoolDumpTests()
-	addFloatDumpTests()
-	addComplexDumpTests()
-	addArrayDumpTests()
-	addSliceDumpTests()
-	addStringDumpTests()
-	addInterfaceDumpTests()
-	addMapDumpTests()
-	addStructDumpTests()
-	addUintptrDumpTests()
-	addUnsafePointerDumpTests()
-	addChanDumpTests()
-	addFuncDumpTests()
-	addCircularDumpTests()
-	addPanicDumpTests()
-	addErrorDumpTests()
-	addCgoDumpTests()
+// TestSpecialTypesJSON tests JSON output for special types
+func TestSpecialTypesJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var ch = make(chan int, 1)
+	var fn = func() int { return 42 }
+	var ptr = uintptr(unsafe.Pointer(&ch))
+	var unsafePtr = unsafe.Pointer(&ch)
 
-	t.Logf("Running %d tests", len(dumpTests))
-	for i, test := range dumpTests {
-		buf := new(bytes.Buffer)
-		spew.Fdump(buf, test.in)
-		s := buf.String()
-		if testFailed(s, test.wants) {
-			t.Errorf("Dump #%d\n got: %s %s", i, s, stringizeWants(test.wants))
-			continue
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"channel", ch},
+		{"function", fn},
+		{"uintptr", ptr},
+		{"unsafe_pointer", unsafePtr},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestSpecialTypesJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+
+			// Special types should have value field
+			if parsed["value"] == nil {
+				t.Errorf("TestSpecialTypesJSON[%s] expected non-null value", tt.name)
+			}
+		})
+	}
+}
+
+// TestByteSliceJSON tests JSON output for byte slices
+func TestByteSliceJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var byteSliceAscii = []byte("Hello")
+	var byteSliceBinary = []byte{0x01, 0x02, 0x03, 0x04}
+	var emptyByteSlice = []byte{}
+	var nilByteSlice []byte = nil
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"byte_slice_ascii", byteSliceAscii},
+		{"byte_slice_binary", byteSliceBinary},
+		{"empty_byte_slice", emptyByteSlice},
+		{"nil_byte_slice", nilByteSlice},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestByteSliceJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestByteSliceSmartJSON tests smart byte slice handling for JSON output
+func TestByteSliceSmartJSON(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       []byte
+		expectASCII bool // 是否期望ASCII输出
+		description string
+	}{
+		{
+			name:        "pure_ascii_text",
+			input:       []byte("Hello, World!"),
+			expectASCII: true,
+			description: "纯ASCII文本应该直接显示",
+		},
+		{
+			name:        "text_with_newline",
+			input:       []byte("Line1\nLine2\tTabbed"),
+			expectASCII: true,
+			description: "包含换行符和制表符的文本应该直接显示",
+		},
+		{
+			name:        "binary_data",
+			input:       []byte{0x00, 0x01, 0xFF, 0xFE},
+			expectASCII: false,
+			description: "纯二进制数据应该显示为十六进制",
+		},
+		{
+			name:        "mixed_data",
+			input:       []byte{'H', 'e', 'l', 'l', 'o', 0x00, 0xFF},
+			expectASCII: false,
+			description: "混合数据（ASCII+二进制）应该显示为十六进制",
+		},
+		{
+			name:        "json_text",
+			input:       []byte(`{"key": "value"}`),
+			expectASCII: true,
+			description: "JSON文本应该直接显示",
+		},
+		{
+			name:        "utf8_text",
+			input:       []byte("Hello 世界"),
+			expectASCII: false,
+			description: "UTF-8文本（包含非ASCII字符）应该显示为十六进制",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Printf("%s: %s\n", tt.description, result)
+
+			// 验证结果是有效的JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestByteSliceSmartJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// 检查value字段
+			value, exists := parsed["value"]
+			if !exists {
+				t.Errorf("TestByteSliceSmartJSON[%s] missing 'value' field", tt.name)
+				return
+			}
+
+			if tt.expectASCII {
+				// 期望ASCII输出：应该是字符串类型
+				if strValue, ok := value.(string); ok {
+					expectedStr := string(tt.input)
+					if strValue != expectedStr {
+						t.Errorf("TestByteSliceSmartJSON[%s] ASCII output mismatch\nexpected: %q\nactual: %q",
+							tt.name, expectedStr, strValue)
+					}
+				} else {
+					t.Errorf("TestByteSliceSmartJSON[%s] expected string output for ASCII data, got %T",
+						tt.name, value)
+				}
+			} else {
+				// 期望十六进制输出：应该是字符串且内容为十六进制
+				if strValue, ok := value.(string); ok {
+					// 检查是否为合法十六进制字符串
+					if _, err := hex.DecodeString(strValue); err != nil {
+						t.Errorf("TestByteSliceSmartJSON[%s] expected hex format output, got: %s",
+							tt.name, strValue)
+					}
+				} else {
+					t.Errorf("TestByteSliceSmartJSON[%s] expected string output for hex data, got %T",
+						tt.name, value)
+				}
+			}
+		})
+	}
+}
+
+// TestConfigStateJSON tests JSON output with different configurations
+func TestConfigStateJSON(t *testing.T) {
+	type TestStruct struct {
+		Name     string
+		Value    *int
+		NilField *string
+	}
+
+	value := 42
+	data := TestStruct{
+		Name:     "test",
+		Value:    &value,
+		NilField: nil,
+	}
+
+	t.Run("default_config", func(t *testing.T) {
+		result := ToJSON(data)
+		result = strings.TrimSpace(result)
+
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Errorf("TestConfigStateJSON[default_config] produced invalid JSON: %v", err)
+		}
+	})
+
+	t.Run("skip_nil_values", func(t *testing.T) {
+		cs := ConfigState{
+			SkipNilValues: true,
+		}
+		result := cs.ToJSON(data)
+		result = strings.TrimSpace(result)
+
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Errorf("TestConfigStateJSON[skip_nil_values] produced invalid JSON: %v", err)
+		}
+	})
+
+	t.Run("max_depth", func(t *testing.T) {
+		cs := ConfigState{
+			MaxDepth: 2,
+		}
+		result := cs.ToJSON(data)
+		result = strings.TrimSpace(result)
+
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Errorf("TestConfigStateJSON[max_depth] produced invalid JSON: %v", err)
+		}
+	})
+}
+
+// TestCircularReferenceJSON tests JSON output for circular references
+func TestCircularReferenceJSON(t *testing.T) {
+	type Node struct {
+		Name string
+		Next *Node
+	}
+
+	node1 := &Node{Name: "Node1"}
+	node2 := &Node{Name: "Node2"}
+	node1.Next = node2
+	node2.Next = node1 // Create circular reference
+
+	t.Run("circular_reference", func(t *testing.T) {
+		result := ToJSON(node1)
+		result = strings.TrimSpace(result)
+
+		// Should not panic and should produce valid JSON
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Errorf("TestCircularReferenceJSON produced invalid JSON: %v", err)
+		}
+
+		// Should contain some result
+		if result == "" {
+			t.Errorf("TestCircularReferenceJSON produced empty result")
+		}
+	})
+}
+
+// TestErrorCasesJSON tests JSON output for error cases
+func TestErrorCasesJSON(t *testing.T) {
+	t.Run("nil_input", func(t *testing.T) {
+		result := ToJSON(nil)
+		result = strings.TrimSpace(result)
+
+		// Should produce valid JSON
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Errorf("TestErrorCasesJSON[nil_input] produced invalid JSON: %v", err)
+		}
+	})
+
+	t.Run("multiple_values", func(t *testing.T) {
+		result := ToJSON(1, 2, 3)
+		lines := strings.Split(strings.TrimSpace(result), "\n")
+
+		if len(lines) < 3 {
+			t.Errorf("TestErrorCasesJSON[multiple_values] expected at least 3 lines, got %d", len(lines))
+		}
+
+		// Each line should be valid JSON
+		for i, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &parsed); err != nil {
+				t.Errorf("TestErrorCasesJSON[multiple_values] line %d produced invalid JSON: %v", i, err)
+			}
+		}
+	})
+}
+
+// TestJSONValidation ensures all outputs are valid JSON
+func TestJSONValidation(t *testing.T) {
+	testInputs := []interface{}{
+		// Basic types
+		42, "hello", true, 3.14, complex(1, 2),
+
+		// Collections
+		[]int{1, 2, 3}, map[string]int{"a": 1}, [2]string{"x", "y"},
+
+		// Pointers and nil
+		func() *int { i := 42; return &i }(), (*int)(nil),
+
+		// Special types
+		make(chan int), func() {}, uintptr(0x1234),
+
+		// Byte slices
+		[]byte("test"), []byte{1, 2, 3, 4},
+	}
+
+	for i, input := range testInputs {
+		t.Run(fmt.Sprintf("validation_%d", i), func(t *testing.T) {
+			result := ToJSON(input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+			// Must be valid JSON
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestJSONValidation[%d] produced invalid JSON: %v\nOutput: %s", i, err, result)
+			}
+
+			// Must not be empty
+			if result == "" {
+				t.Errorf("TestJSONValidation[%d] produced empty output", i)
+			}
+		})
+	}
+}
+
+// TestDumpMethodsJSON tests the various dump methods return consistent JSON
+func TestDumpMethodsJSON(t *testing.T) {
+	input := map[string]int{"test": 42}
+
+	// ToJSON
+	result1 := ToJSON(input)
+	result1 = strings.TrimSpace(result1)
+
+	// SdumpJSON (should be identical)
+	result2 := SdumpJSON(input)
+	result2 = strings.TrimSpace(result2)
+
+	// ConfigState.ToJSON
+	cs := ConfigState{Indent: " "}
+	result3 := cs.ToJSON(input)
+	result3 = strings.TrimSpace(result3)
+
+	// All should produce valid JSON
+	for i, result := range []string{result1, result2, result3} {
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Errorf("TestDumpMethodsJSON[method_%d] produced invalid JSON: %v", i, err)
+		}
+	}
+
+	// ToJSON and SdumpJSON should be identical
+	if result1 != result2 {
+		t.Errorf("ToJSON and SdumpJSON produced different results:\nToJSON:    %s\nSdumpJSON: %s", result1, result2)
+	}
+}
+
+// TestMultiDimensionalJSON tests JSON output for multi-dimensional arrays and slices
+func TestMultiDimensionalJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var twoDimArray = [2][3]int{{1, 2, 3}, {4, 5, 6}}
+	var sliceOfSlice = [][]string{{"a", "b"}, {"c", "d"}, {"e"}}
+	var threeDimSlice = [][][]int{{{1, 2}, {3}}, {{4, 5, 6}}}
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"two_dim_array", twoDimArray},
+		{"slice_of_slice", sliceOfSlice},
+		{"three_dim_slice", threeDimSlice},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestMultiDimensionalJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestNestedContainersJSON tests JSON output for nested container types
+func TestNestedContainersJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var mapOfSlice = map[string][]int{"numbers": {1, 2, 3}, "more": {4, 5}}
+	var sliceOfMap = []map[string]int{{"a": 1, "b": 2}, {"c": 3}}
+	var mapOfMap = map[string]map[string]int{"group1": {"x": 1, "y": 2}, "group2": {"z": 3}}
+	var sliceOfStruct = []struct {
+		Name  string
+		Value int
+	}{{"item1", 10}, {"item2", 20}}
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"map_of_slice", mapOfSlice},
+		{"slice_of_map", sliceOfMap},
+		{"map_of_map", mapOfMap},
+		{"slice_of_struct", sliceOfStruct},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestNestedContainersJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestCustomTypesJSON tests JSON output for custom types and type aliases
+func TestCustomTypesJSON(t *testing.T) {
+	// 定义自定义类型
+	type MyInt int
+	type MyString string
+	type MyFloat float64
+	type MyBool bool
+
+	// 使用变量而不是常量
+	var myInt = MyInt(42)
+	var myString = MyString("custom")
+	var myFloat = MyFloat(3.14)
+	var myBool = MyBool(true)
+
+	// 基于slice的自定义类型
+	type StringList []string
+	var stringList = StringList{"hello", "world"}
+
+	// 基于map的自定义类型
+	type StringMap map[string]int
+	var stringMap = StringMap{"a": 1, "b": 2}
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"custom_int", myInt},
+		{"custom_string", myString},
+		{"custom_float", myFloat},
+		{"custom_bool", myBool},
+		{"custom_slice", stringList},
+		{"custom_map", stringMap},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestCustomTypesJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestRuneAndStringSpecialJSON tests JSON output for rune and special strings
+func TestRuneAndStringSpecialJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var runeVar = 'A'
+	var unicodeRune = '中'
+	var emojiRune = '😀'
+	var unicodeString = "Hello 世界 🌍"
+	var specialCharsString = "Line1\nLine2\tTabbed\"Quoted\\"
+	var emptyRune = rune(0)
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"ascii_rune", runeVar},
+		{"unicode_rune", unicodeRune},
+		{"emoji_rune", emojiRune},
+		{"unicode_string", unicodeString},
+		{"special_chars_string", specialCharsString},
+		{"empty_rune", emptyRune},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestRuneAndStringSpecialJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestFloatSpecialValuesJSON tests JSON output for special float values
+func TestFloatSpecialValuesJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var nanFloat32 = float32(math.NaN())
+	var nanFloat64 = math.NaN()
+	var infFloat32 = float32(math.Inf(1))
+	var infFloat64 = math.Inf(1)
+	var negInfFloat32 = float32(math.Inf(-1))
+	var negInfFloat64 = math.Inf(-1)
+	var zeroFloat = 0.0
+	var negZeroFloat = math.Copysign(0, -1)
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"nan_float32", nanFloat32},
+		{"nan_float64", nanFloat64},
+		{"inf_float32", infFloat32},
+		{"inf_float64", infFloat64},
+		{"neg_inf_float32", negInfFloat32},
+		{"neg_inf_float64", negInfFloat64},
+		{"zero_float", zeroFloat},
+		{"neg_zero_float", negZeroFloat},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// For special float values (NaN, Inf), JSON standard doesn't support them
+			// so we just check that result is not empty and contains expected representation
+			if strings.Contains(tt.name, "nan") {
+				if !strings.Contains(result, "NaN") {
+					t.Errorf("TestFloatSpecialValuesJSON[%s] expected NaN representation, got: %s", tt.name, result)
+				}
+			} else if strings.Contains(tt.name, "inf") {
+				if !strings.Contains(result, "Inf") {
+					t.Errorf("TestFloatSpecialValuesJSON[%s] expected Inf representation, got: %s", tt.name, result)
+				}
+			} else {
+				// For normal float values, verify it's valid JSON
+				var parsed map[string]interface{}
+				if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+					t.Errorf("TestFloatSpecialValuesJSON[%s] produced invalid JSON: %v", tt.name, err)
+				}
+			}
+		})
+	}
+}
+
+// TestStructAdvancedJSON tests JSON output for advanced struct scenarios
+func TestStructAdvancedJSON(t *testing.T) {
+	// 匿名字段结构体
+	type Base struct {
+		ID   int
+		Name string
+	}
+
+	type Extended struct {
+		Base
+		Extra string
+	}
+
+	// 嵌套匿名结构体
+	type WithAnonymous struct {
+		PublicField  string
+		privateField int // 私有字段
+		Anonymous    struct {
+			InnerField string
+		}
+	}
+
+	// 使用变量而不是常量
+	var extended = Extended{
+		Base:  Base{ID: 1, Name: "test"},
+		Extra: "additional",
+	}
+
+	var withAnonymous = WithAnonymous{
+		PublicField:  "public",
+		privateField: 42,
+	}
+	withAnonymous.Anonymous.InnerField = "inner"
+
+	// 空指针字段的结构体
+	type WithPointers struct {
+		Name   string
+		Value  *int
+		Nested *Base
+	}
+
+	var val = 100
+	var withPointers = WithPointers{
+		Name:   "pointer test",
+		Value:  &val,
+		Nested: nil,
+	}
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"struct_with_embedded", extended},
+		{"struct_with_anonymous", withAnonymous},
+		{"struct_with_pointers", withPointers},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestStructAdvancedJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestInterfaceAdvancedJSON tests JSON output for advanced interface scenarios
+func TestInterfaceAdvancedJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var structInterface interface{} = struct {
+		Name string
+		Age  int
+	}{"John", 30}
+
+	var sliceInterface interface{} = []int{1, 2, 3}
+	var mapInterface interface{} = map[string]int{"key": 42}
+	var pointerInterface interface{} = func() *int { i := 100; return &i }()
+
+	// 接口的接口
+	var nestedInterface interface{} = interface{}("nested")
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"interface_with_struct", structInterface},
+		{"interface_with_slice", sliceInterface},
+		{"interface_with_map", mapInterface},
+		{"interface_with_pointer", pointerInterface},
+		{"nested_interface", nestedInterface},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestInterfaceAdvancedJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestMapAdvancedKeysJSON tests JSON output for maps with different key types
+func TestMapAdvancedKeysJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var mapIntKey = map[int]string{1: "one", 2: "two", 100: "hundred"}
+	var mapFloat64Key = map[float64]int{1.1: 11, 2.2: 22}
+	var mapBoolKey = map[bool]string{true: "yes", false: "no"}
+
+	// 结构体作为键（只有可比较的字段）
+	type SimpleKey struct {
+		X, Y int
+	}
+
+	var mapStructKey = map[SimpleKey]string{
+		{1, 2}: "point1",
+		{3, 4}: "point2",
+	}
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"map_int_key", mapIntKey},
+		{"map_float64_key", mapFloat64Key},
+		{"map_bool_key", mapBoolKey},
+		{"map_struct_key", mapStructKey},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestMapAdvancedKeysJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestDeepNestingJSON tests JSON output for deeply nested structures
+func TestDeepNestingJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var deepSlice = [][][][][]int{{{{{1, 2}}}}}
+
+	type DeepNested struct {
+		Level1 *struct {
+			Level2 *struct {
+				Level3 *struct {
+					Value string
+				}
+			}
+		}
+	}
+
+	var deepStruct = DeepNested{
+		Level1: &struct {
+			Level2 *struct {
+				Level3 *struct {
+					Value string
+				}
+			}
+		}{
+			Level2: &struct {
+				Level3 *struct {
+					Value string
+				}
+			}{
+				Level3: &struct {
+					Value string
+				}{
+					Value: "deep value",
+				},
+			},
+		},
+	}
+
+	// 多级指针
+	var value = 42
+	var ptr1 = &value
+	var ptr2 = &ptr1
+	var ptr3 = &ptr2
+	var ptr4 = &ptr3
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"deep_slice", deepSlice},
+		{"deep_struct", deepStruct},
+		{"multi_level_pointer", ptr4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+			fmt.Println(result)
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestDeepNestingJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestEdgeCasesJSON tests JSON output for various edge cases
+func TestEdgeCasesJSON(t *testing.T) {
+	// 使用变量而不是常量
+	var largeSlice = make([]int, 1000)
+	for i := range largeSlice {
+		largeSlice[i] = i
+	}
+
+	var sparseSlice = make([]interface{}, 10)
+	sparseSlice[0] = "first"
+	sparseSlice[5] = 42
+	sparseSlice[9] = "last"
+
+	// 混合类型的slice（通过interface{}）
+	var mixedSlice = []interface{}{
+		1, "hello", true, 3.14, []int{1, 2}, map[string]int{"a": 1},
+	}
+
+	tests := []struct {
+		name  string
+		input interface{}
+	}{
+		{"large_slice", largeSlice},
+		{"sparse_slice", sparseSlice},
+		{"mixed_slice", mixedSlice},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+
+			// For large slice, just check it's not empty and valid JSON
+			if tt.name == "large_slice" {
+				if len(result) < 100 {
+					t.Errorf("TestEdgeCasesJSON[%s] result too short: %d chars", tt.name, len(result))
+				}
+			} else {
+				fmt.Println(result)
+			}
+
+			// Verify the result is valid JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestEdgeCasesJSON[%s] produced invalid JSON: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestMaxDepthJSON tests the MaxDepth configuration for JSON output
+func TestMaxDepthJSON(t *testing.T) {
+	// 创建深度嵌套的结构体
+	type Level struct {
+		Value string
+		Child *Level
+	}
+
+	// 创建5层深度的嵌套结构
+	var deepStruct = &Level{
+		Value: "Level1",
+		Child: &Level{
+			Value: "Level2",
+			Child: &Level{
+				Value: "Level3",
+				Child: &Level{
+					Value: "Level4",
+					Child: &Level{
+						Value: "Level5",
+						Child: nil,
+					},
+				},
+			},
+		},
+	}
+
+	// 创建深度嵌套的slice
+	var deepSlice = []interface{}{
+		"Level1",
+		[]interface{}{
+			"Level2",
+			[]interface{}{
+				"Level3",
+				[]interface{}{
+					"Level4",
+					[]interface{}{
+						"Level5",
+					},
+				},
+			},
+		},
+	}
+
+	// 创建深度嵌套的map
+	var deepMap = map[string]interface{}{
+		"level1": map[string]interface{}{
+			"level2": map[string]interface{}{
+				"level3": map[string]interface{}{
+					"level4": map[string]interface{}{
+						"level5": "deep value",
+					},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		input    interface{}
+		maxDepth int
+		checkFn  func(t *testing.T, result string, maxDepth int)
+	}{
+		{
+			name:     "struct_max_depth_1",
+			input:    deepStruct,
+			maxDepth: 1,
+			checkFn:  validateMaxDepthStruct,
+		},
+		{
+			name:     "struct_max_depth_3",
+			input:    deepStruct,
+			maxDepth: 3,
+			checkFn:  validateMaxDepthStruct,
+		},
+		{
+			name:     "struct_max_depth_unlimited",
+			input:    deepStruct,
+			maxDepth: 0, // 0 means unlimited
+			checkFn:  validateMaxDepthStruct,
+		},
+		{
+			name:     "slice_max_depth_1",
+			input:    deepSlice,
+			maxDepth: 1,
+			checkFn:  validateMaxDepthSlice,
+		},
+		{
+			name:     "slice_max_depth_2",
+			input:    deepSlice,
+			maxDepth: 2,
+			checkFn:  validateMaxDepthSlice,
+		},
+		{
+			name:     "slice_max_depth_unlimited",
+			input:    deepSlice,
+			maxDepth: 0,
+			checkFn:  validateMaxDepthSlice,
+		},
+		{
+			name:     "map_max_depth_1",
+			input:    deepMap,
+			maxDepth: 1,
+			checkFn:  validateMaxDepthMap,
+		},
+		{
+			name:     "map_max_depth_2",
+			input:    deepMap,
+			maxDepth: 2,
+			checkFn:  validateMaxDepthMap,
+		},
+		{
+			name:     "map_max_depth_unlimited",
+			input:    deepMap,
+			maxDepth: 0,
+			checkFn:  validateMaxDepthMap,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := ConfigState{
+				MaxDepth: tt.maxDepth,
+			}
+			result := cs.ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+
+			// 验证结果是有效的JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestMaxDepthJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// 调用特定的验证函数
+			if tt.checkFn != nil {
+				tt.checkFn(t, result, tt.maxDepth)
+			}
+
+			fmt.Printf("=== %s (MaxDepth: %d) ===\n%s\n\n", tt.name, tt.maxDepth, result)
+		})
+	}
+}
+
+// validateMaxDepthStruct 验证结构体的最大深度限制
+func validateMaxDepthStruct(t *testing.T, result string, maxDepth int) {
+	// 解析JSON结果
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Errorf("validateMaxDepthStruct: invalid JSON: %v", err)
+		return
+	}
+
+	// 检查是否被截断
+	if maxDepth > 0 {
+		// 对于有限制的深度，检查是否包含截断指示
+		depthCount := countNestedDepthInJSON(result, "Child")
+		if depthCount > maxDepth {
+			t.Errorf("validateMaxDepthStruct: expected max depth %d, but found depth %d", maxDepth, depthCount)
+		}
+	} else {
+		// 对于无限制深度，应该能看到所有层级
+		if !strings.Contains(result, "Level5") {
+			t.Errorf("validateMaxDepthStruct: unlimited depth should contain Level5")
 		}
 	}
 }
 
-func TestDumpSortedKeys(t *testing.T) {
-	cfg := spew.ConfigState{SortKeys: true}
-	s := cfg.Sdump(map[int]string{1: "1", 3: "3", 2: "2"})
-	expected := "(map[int]string) (len=3) {\n(int) 1: (string) (len=1) " +
-		"\"1\",\n(int) 2: (string) (len=1) \"2\",\n(int) 3: (string) " +
-		"(len=1) \"3\"\n" +
-		"}\n"
-	if s != expected {
-		t.Errorf("Sorted keys mismatch:\n  %v %v", s, expected)
+// validateMaxDepthSlice 验证slice的最大深度限制
+func validateMaxDepthSlice(t *testing.T, result string, maxDepth int) {
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Errorf("validateMaxDepthSlice: invalid JSON: %v", err)
+		return
 	}
 
-	s = cfg.Sdump(map[stringer]int{"1": 1, "3": 3, "2": 2})
-	expected = "(map[spew_test.stringer]int) (len=3) {\n" +
-		"(spew_test.stringer) (len=1) stringer 1: (int) 1,\n" +
-		"(spew_test.stringer) (len=1) stringer 2: (int) 2,\n" +
-		"(spew_test.stringer) (len=1) stringer 3: (int) 3\n" +
-		"}\n"
-	if s != expected {
-		t.Errorf("Sorted keys mismatch:\n  %v %v", s, expected)
+	if maxDepth > 0 {
+		// 检查嵌套数组的深度
+		depthCount := countArrayNestingInJSON(result)
+		if depthCount > maxDepth {
+			t.Errorf("validateMaxDepthSlice: expected max depth %d, but found depth %d", maxDepth, depthCount)
+		}
+	} else {
+		// 无限制深度应该包含最深层的值
+		if !strings.Contains(result, "Level5") {
+			t.Errorf("validateMaxDepthSlice: unlimited depth should contain Level5")
+		}
+	}
+}
+
+// validateMaxDepthMap 验证map的最大深度限制
+func validateMaxDepthMap(t *testing.T, result string, maxDepth int) {
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Errorf("validateMaxDepthMap: invalid JSON: %v", err)
+		return
 	}
 
-	s = cfg.Sdump(map[pstringer]int{pstringer("1"): 1, pstringer("3"): 3, pstringer("2"): 2})
-	expected = "(map[spew_test.pstringer]int) (len=3) {\n" +
-		"(spew_test.pstringer) (len=1) stringer 1: (int) 1,\n" +
-		"(spew_test.pstringer) (len=1) stringer 2: (int) 2,\n" +
-		"(spew_test.pstringer) (len=1) stringer 3: (int) 3\n" +
-		"}\n"
-	if spew.UnsafeDisabled {
-		expected = "(map[spew_test.pstringer]int) (len=3) {\n" +
-			"(spew_test.pstringer) (len=1) \"1\": (int) 1,\n" +
-			"(spew_test.pstringer) (len=1) \"2\": (int) 2,\n" +
-			"(spew_test.pstringer) (len=1) \"3\": (int) 3\n" +
-			"}\n"
+	if maxDepth > 0 {
+		// 对于有限制的深度，检查嵌套层数
+		if maxDepth >= 5 || maxDepth == 0 {
+			// 足够深或无限制，应该能看到最深的值
+			if !strings.Contains(result, "deep value") {
+				t.Errorf("validateMaxDepthMap: should contain 'deep value' with depth %d", maxDepth)
+			}
+		}
+	} else {
+		// 无限制深度
+		if !strings.Contains(result, "deep value") {
+			t.Errorf("validateMaxDepthMap: unlimited depth should contain 'deep value'")
+		}
 	}
-	if s != expected {
-		t.Errorf("Sorted keys mismatch:\n  %v %v", s, expected)
+}
+
+// countNestedDepthInJSON 计算JSON中特定字段的嵌套深度
+func countNestedDepthInJSON(jsonStr, fieldName string) int {
+	count := 0
+	searchStr := fmt.Sprintf(`"%s"`, fieldName)
+
+	for strings.Contains(jsonStr, searchStr) {
+		count++
+		// 移除第一个匹配，继续查找下一个嵌套层
+		index := strings.Index(jsonStr, searchStr)
+		if index == -1 {
+			break
+		}
+		jsonStr = jsonStr[index+len(searchStr):]
 	}
 
-	s = cfg.Sdump(map[customError]int{customError(1): 1, customError(3): 3, customError(2): 2})
-	expected = "(map[spew_test.customError]int) (len=3) {\n" +
-		"(spew_test.customError) error: 1: (int) 1,\n" +
-		"(spew_test.customError) error: 2: (int) 2,\n" +
-		"(spew_test.customError) error: 3: (int) 3\n" +
-		"}\n"
-	if s != expected {
-		t.Errorf("Sorted keys mismatch:\n  %v %v", s, expected)
+	return count
+}
+
+// countArrayNestingInJSON 计算JSON中数组的嵌套深度
+func countArrayNestingInJSON(jsonStr string) int {
+	maxDepth := 0
+	currentDepth := 0
+
+	for _, char := range jsonStr {
+		switch char {
+		case '[':
+			currentDepth++
+			if currentDepth > maxDepth {
+				maxDepth = currentDepth
+			}
+		case ']':
+			currentDepth--
+		}
 	}
 
+	return maxDepth
+}
+
+// TestMaxDepthCircularReferenceJSON 测试MaxDepth在循环引用中的行为
+func TestMaxDepthCircularReferenceJSON(t *testing.T) {
+	type Node struct {
+		Name string
+		Next *Node
+	}
+
+	// 创建循环引用
+	node1 := &Node{Name: "Node1"}
+	node2 := &Node{Name: "Node2"}
+	node1.Next = node2
+	node2.Next = node1 // 创建循环
+
+	tests := []struct {
+		name     string
+		maxDepth int
+	}{
+		{"circular_max_depth_1", 1},
+		{"circular_max_depth_3", 3},
+		{"circular_max_depth_5", 5},
+		{"circular_unlimited", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := ConfigState{
+				MaxDepth: tt.maxDepth,
+			}
+
+			// 这不应该导致无限循环或崩溃
+			result := cs.ToJSON(node1)
+			result = strings.TrimSpace(result)
+
+			// 验证结果是有效的JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestMaxDepthCircularReferenceJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// 结果不应该为空
+			if result == "" {
+				t.Errorf("TestMaxDepthCircularReferenceJSON[%s] produced empty result", tt.name)
+			}
+
+			fmt.Printf("=== %s ===\n%s\n\n", tt.name, result)
+		})
+	}
+}
+
+// TestMaxDepthComplexStructuresJSON 测试复杂数据结构的MaxDepth
+func TestMaxDepthComplexStructuresJSON(t *testing.T) {
+	// 复杂的混合嵌套结构
+	type ComplexStruct struct {
+		Name     string
+		Children []interface{}
+		MetaData map[string]interface{}
+		Parent   *ComplexStruct
+	}
+
+	// 创建复杂的嵌套结构
+	var root = &ComplexStruct{
+		Name: "Root",
+		Children: []interface{}{
+			"child1",
+			map[string]interface{}{
+				"nested": []interface{}{
+					"deep1",
+					map[string]interface{}{
+						"deeper": "value",
+					},
+				},
+			},
+		},
+		MetaData: map[string]interface{}{
+			"level1": map[string]interface{}{
+				"level2": map[string]interface{}{
+					"level3": "meta value",
+				},
+			},
+		},
+	}
+
+	// 添加一个子结构
+	child := &ComplexStruct{
+		Name:     "Child",
+		Children: []interface{}{"grandchild"},
+		MetaData: map[string]interface{}{"type": "child"},
+		Parent:   root,
+	}
+	root.Children = append(root.Children, child)
+
+	tests := []struct {
+		name     string
+		maxDepth int
+	}{
+		{"complex_max_depth_1", 1},
+		{"complex_max_depth_2", 2},
+		{"complex_max_depth_4", 4},
+		{"complex_unlimited", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := ConfigState{
+				MaxDepth: tt.maxDepth,
+			}
+
+			result := cs.ToJSON(root)
+			result = strings.TrimSpace(result)
+
+			// 验证结果是有效的JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestMaxDepthComplexStructuresJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// 检查深度限制是否生效
+			if tt.maxDepth > 0 && tt.maxDepth < 4 {
+				// 对于较浅的深度，不应该包含很深的值
+				if strings.Contains(result, "meta value") && tt.maxDepth < 3 {
+					t.Errorf("TestMaxDepthComplexStructuresJSON[%s] should not contain deep values with maxDepth %d", tt.name, tt.maxDepth)
+				}
+			}
+
+			fmt.Printf("=== %s ===\n%s\n\n", tt.name, result)
+		})
+	}
+}
+
+// TestMaxDepthPerformanceJSON 测试MaxDepth对性能的影响
+func TestMaxDepthPerformanceJSON(t *testing.T) {
+	// 创建一个非常大的深度结构用于性能测试
+	type DeepStruct struct {
+		Level int
+		Child *DeepStruct
+	}
+
+	// 创建20层深度的结构
+	var buildDeepStruct func(level, maxLevel int) *DeepStruct
+	buildDeepStruct = func(level, maxLevel int) *DeepStruct {
+		if level >= maxLevel {
+			return nil
+		}
+		return &DeepStruct{
+			Level: level,
+			Child: buildDeepStruct(level+1, maxLevel),
+		}
+	}
+
+	deepStruct := buildDeepStruct(0, 20)
+
+	tests := []struct {
+		name     string
+		maxDepth int
+	}{
+		{"performance_max_depth_5", 5},
+		{"performance_max_depth_10", 10},
+		{"performance_unlimited", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := ConfigState{
+				MaxDepth: tt.maxDepth,
+			}
+
+			// 测量执行时间
+			start := time.Now()
+			result := cs.ToJSON(deepStruct)
+			duration := time.Since(start)
+
+			result = strings.TrimSpace(result)
+
+			// 验证结果是有效的JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestMaxDepthPerformanceJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			fmt.Printf("=== %s (Duration: %v) ===\nResult length: %d characters\n\n",
+				tt.name, duration, len(result))
+
+			// 对于有限制的深度，执行应该相对较快
+			if tt.maxDepth > 0 && duration > time.Second {
+				t.Logf("TestMaxDepthPerformanceJSON[%s] took %v, consider if this is acceptable", tt.name, duration)
+			}
+		})
+	}
+}
+
+// TestImprovedMaxDepthJSON 测试改进的MaxDepth显示功能
+func TestImprovedMaxDepthJSON(t *testing.T) {
+	// 创建深度嵌套的结构体用于测试
+	type NestedStruct struct {
+		Name    string
+		Level   int
+		Child   *NestedStruct
+		Data    []int
+		Mapping map[string]interface{}
+	}
+
+	// 创建包含多种类型的深度结构
+	var deepStruct = &NestedStruct{
+		Name:  "Level1",
+		Level: 1,
+		Data:  []int{1, 2, 3, 4, 5},
+		Mapping: map[string]interface{}{
+			"key1": "value1",
+			"key2": 42,
+		},
+		Child: &NestedStruct{
+			Name:  "Level2",
+			Level: 2,
+			Data:  []int{10, 20, 30},
+			Mapping: map[string]interface{}{
+				"nested": map[string]interface{}{
+					"deep": "value",
+				},
+			},
+			Child: &NestedStruct{
+				Name:    "Level3",
+				Level:   3,
+				Data:    []int{100, 200},
+				Mapping: map[string]interface{}{"final": "data"},
+				Child:   nil,
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		input    interface{}
+		maxDepth int
+		checkFn  func(t *testing.T, result string)
+	}{
+		{
+			name:     "improved_struct_depth_1",
+			input:    deepStruct,
+			maxDepth: 1,
+			checkFn: func(t *testing.T, result string) {
+				if !strings.Contains(result, "__truncated__") {
+					t.Error("Expected truncation info with __truncated__ field")
+				}
+				if !strings.Contains(result, "type") {
+					t.Error("Expected type information")
+				}
+				if !strings.Contains(result, "depth") {
+					t.Error("Expected depth information")
+				}
+				if !strings.Contains(result, "max_depth") {
+					t.Error("Expected max_depth information")
+				}
+			},
+		},
+		{
+			name:     "improved_slice_depth_1",
+			input:    []interface{}{[]interface{}{[]interface{}{"deep"}}},
+			maxDepth: 1,
+			checkFn: func(t *testing.T, result string) {
+				if !strings.Contains(result, "__truncated__") {
+					t.Error("Expected truncation info for slice")
+				}
+				if !strings.Contains(result, "type") {
+					t.Error("Expected type information for slice")
+				}
+				if !strings.Contains(result, "depth") {
+					t.Error("Expected depth information for slice")
+				}
+				if !strings.Contains(result, "max_depth") {
+					t.Error("Expected max_depth information for slice")
+				}
+			},
+		},
+		{
+			name: "improved_map_depth_1",
+			input: map[string]interface{}{
+				"level1": map[string]interface{}{
+					"level2": "deep value",
+				},
+			},
+			maxDepth: 1,
+			checkFn: func(t *testing.T, result string) {
+				if !strings.Contains(result, "__truncated__") {
+					t.Error("Expected truncation info for map")
+				}
+				if !strings.Contains(result, "type") {
+					t.Error("Expected type information for map")
+				}
+				if !strings.Contains(result, "depth") {
+					t.Error("Expected depth information for map")
+				}
+				if !strings.Contains(result, "max_depth") {
+					t.Error("Expected max_depth information for map")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := ConfigState{
+				MaxDepth: tt.maxDepth,
+			}
+			result := cs.ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+
+			fmt.Printf("=== %s ===\n%s\n\n", tt.name, result)
+
+			// 验证结果是有效的JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestImprovedMaxDepthJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// 运行特定的检查函数
+			if tt.checkFn != nil {
+				tt.checkFn(t, result)
+			}
+		})
+	}
+}
+
+// TestDetailedTruncationInfoJSON 测试详细的截断信息
+func TestDetailedTruncationInfoJSON(t *testing.T) {
+	// 测试结构体的详细信息
+	type LargeStruct struct {
+		Field1  string
+		Field2  int
+		Field3  bool
+		Field4  float64
+		Field5  []int
+		Field6  map[string]string
+		Field7  *string
+		Private int
+	}
+
+	var str = "test"
+	var largeStruct = LargeStruct{
+		Field1:  "value1",
+		Field2:  42,
+		Field3:  true,
+		Field4:  3.14,
+		Field5:  []int{1, 2, 3},
+		Field6:  map[string]string{"key": "value"},
+		Field7:  &str,
+		Private: 100,
+	}
+
+	// 测试大数组的详细信息
+	var largeArray = make([]int, 100)
+	for i := range largeArray {
+		largeArray[i] = i
+	}
+
+	// 测试大map的详细信息
+	var largeMap = make(map[string]int)
+	for i := 0; i < 50; i++ {
+		largeMap[fmt.Sprintf("key%d", i)] = i
+	}
+
+	tests := []struct {
+		name    string
+		input   interface{}
+		checkFn func(t *testing.T, result string)
+	}{
+		{
+			name:  "large_struct_truncation",
+			input: map[string]interface{}{"data": largeStruct},
+			checkFn: func(t *testing.T, result string) {
+				if !strings.Contains(result, "__truncated__") {
+					t.Error("Expected __truncated__ for struct truncation")
+				}
+				if !strings.Contains(result, "type") {
+					t.Error("Expected type for struct truncation")
+				}
+				if !strings.Contains(result, "depth") {
+					t.Error("Expected depth for struct truncation")
+				}
+				if !strings.Contains(result, "max_depth") {
+					t.Error("Expected max_depth for struct truncation")
+				}
+			},
+		},
+		{
+			name:  "large_array_truncation",
+			input: []interface{}{largeArray},
+			checkFn: func(t *testing.T, result string) {
+				if !strings.Contains(result, "__truncated__") {
+					t.Error("Expected __truncated__ for array truncation")
+				}
+				if !strings.Contains(result, "type") {
+					t.Error("Expected type for array truncation")
+				}
+				if !strings.Contains(result, "depth") {
+					t.Error("Expected depth for array truncation")
+				}
+				if !strings.Contains(result, "max_depth") {
+					t.Error("Expected max_depth for array truncation")
+				}
+			},
+		},
+		{
+			name:  "large_map_truncation",
+			input: []interface{}{largeMap},
+			checkFn: func(t *testing.T, result string) {
+				if !strings.Contains(result, "__truncated__") {
+					t.Error("Expected __truncated__ for map truncation")
+				}
+				if !strings.Contains(result, "type") {
+					t.Error("Expected type for map truncation")
+				}
+				if !strings.Contains(result, "depth") {
+					t.Error("Expected depth for map truncation")
+				}
+				if !strings.Contains(result, "max_depth") {
+					t.Error("Expected max_depth for map truncation")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := ConfigState{
+				MaxDepth: 1, // 强制截断
+			}
+			result := cs.ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+
+			fmt.Printf("=== %s ===\n%s\n\n", tt.name, result)
+
+			// 验证结果是有效的JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestDetailedTruncationInfoJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// 运行特定的检查函数
+			if tt.checkFn != nil {
+				tt.checkFn(t, result)
+			}
+		})
+	}
+}
+
+// TestPointerAndInterfaceTruncationJSON 测试指针和接口的截断信息
+func TestPointerAndInterfaceTruncationJSON(t *testing.T) {
+	// 创建指针链
+	var value = 42
+	var ptr1 = &value
+	var ptr2 = &ptr1
+
+	// 创建接口包装
+	var interfaceValue interface{} = map[string]interface{}{
+		"nested": "value",
+	}
+
+	tests := []struct {
+		name    string
+		input   interface{}
+		checkFn func(t *testing.T, result string)
+	}{
+		{
+			name:  "pointer_truncation",
+			input: []interface{}{ptr2},
+			checkFn: func(t *testing.T, result string) {
+				if !strings.Contains(result, "__truncated__") {
+					t.Error("Expected __truncated__ for pointer truncation")
+				}
+				if !strings.Contains(result, "type") {
+					t.Error("Expected type for pointer truncation")
+				}
+				if !strings.Contains(result, "depth") {
+					t.Error("Expected depth for pointer truncation")
+				}
+				if !strings.Contains(result, "max_depth") {
+					t.Error("Expected max_depth for pointer truncation")
+				}
+			},
+		},
+		{
+			name:  "interface_truncation",
+			input: []interface{}{interfaceValue},
+			checkFn: func(t *testing.T, result string) {
+				if !strings.Contains(result, "__truncated__") {
+					t.Error("Expected __truncated__ for interface truncation")
+				}
+				if !strings.Contains(result, "type") {
+					t.Error("Expected type for interface truncation")
+				}
+				if !strings.Contains(result, "depth") {
+					t.Error("Expected depth for interface truncation")
+				}
+				if !strings.Contains(result, "max_depth") {
+					t.Error("Expected max_depth for interface truncation")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cs := ConfigState{
+				MaxDepth: 1, // 强制截断
+			}
+			result := cs.ToJSON(tt.input)
+			result = strings.TrimSpace(result)
+
+			fmt.Printf("=== %s ===\n%s\n\n", tt.name, result)
+
+			// 验证结果是有效的JSON
+			var parsed map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+				t.Errorf("TestPointerAndInterfaceTruncationJSON[%s] produced invalid JSON: %v", tt.name, err)
+				return
+			}
+
+			// 运行特定的检查函数
+			if tt.checkFn != nil {
+				tt.checkFn(t, result)
+			}
+		})
+	}
+}
+
+// TestCompareOldVsNewMaxDepthJSON 比较旧版本和新版本的MaxDepth输出
+func TestCompareOldVsNewMaxDepthJSON(t *testing.T) {
+	// 创建测试数据
+	type TestData struct {
+		Name  string
+		Items []interface{}
+		Meta  map[string]interface{}
+	}
+
+	var testData = TestData{
+		Name: "TestData",
+		Items: []interface{}{
+			"item1",
+			map[string]interface{}{
+				"nested": "value",
+			},
+		},
+		Meta: map[string]interface{}{
+			"version": "1.0",
+			"config":  map[string]interface{}{"debug": true},
+		},
+	}
+
+	// 测试在深度1的情况下的输出
+	cs := ConfigState{
+		MaxDepth: 1,
+	}
+
+	result := cs.ToJSON(testData)
+	result = strings.TrimSpace(result)
+
+	fmt.Printf("=== 改进后的MaxDepth输出 ===\n%s\n\n", result)
+
+	// 验证新的输出包含更多有用信息
+	t.Run("improved_output_validation", func(t *testing.T) {
+		// 验证结果是有效的JSON
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Errorf("Improved MaxDepth output produced invalid JSON: %v", err)
+			return
+		}
+
+		// 检查是否包含改进的信息
+		hasImprovedInfo := strings.Contains(result, "__truncated__") ||
+			strings.Contains(result, "num_fields") ||
+			strings.Contains(result, "length") ||
+			strings.Contains(result, "type")
+
+		if !hasImprovedInfo {
+			t.Error("Expected improved truncation information in output")
+		}
+
+		// 确保不再是简单的 "max depth reached" 字符串
+		if strings.Contains(result, `"max depth reached"`) && !strings.Contains(result, "__truncated__") {
+			t.Error("Output still uses old simple 'max depth reached' format")
+		}
+	})
+}
+
+// 用于unsafe dump测试的结构体
+// 包含导出和未导出字段
+
+type testUnsafeStruct struct {
+	Exported   int
+	unexported string
+}
+
+func TestUnsafeDump_UnexportedField(t *testing.T) {
+	obj := testUnsafeStruct{
+		Exported:   42,
+		unexported: "hidden",
+	}
+	jsonStr := SdumpJSON(&obj)
+	if !strings.Contains(jsonStr, "hidden") {
+		t.Errorf("unsafe dump 未能导出未导出字段，输出: %s", jsonStr)
+	}
+
+	if !strings.Contains(jsonStr, "Exported") || !strings.Contains(jsonStr, "unexported") {
+		t.Errorf("字段名未包含在输出中: %s", jsonStr)
+	}
+	fmt.Println(jsonStr)
+
+	// go-spew 对比测试
+	goSpewStr := gspew.Sdump(&obj)
+	if !strings.Contains(goSpewStr, "hidden") {
+		t.Errorf("go-spew 未能导出未导出字段，输出: %s", goSpewStr)
+	}
+	fmt.Println(goSpewStr)
+	if !strings.Contains(goSpewStr, "Exported") || !strings.Contains(goSpewStr, "unexported") {
+		t.Errorf("go-spew 字段名未包含在输出中: %s", goSpewStr)
+	}
+	fmt.Println(goSpewStr)
+}
+
+func TestSdump_ComplexStructWithUnsupportedFields(t *testing.T) {
+	type dummyStream struct{}
+	type dummyConn struct{}
+	type grpcTunnel struct {
+		stream   interface{}
+		sendLock *sync.Mutex
+		recvLock *sync.Mutex
+		grpcConn *dummyConn
+		pending  chan struct{}
+		fn       func()
+	}
+
+	tunnel := &grpcTunnel{
+		stream:   &dummyStream{},
+		sendLock: &sync.Mutex{},
+		recvLock: &sync.Mutex{},
+		grpcConn: &dummyConn{},
+		pending:  make(chan struct{}),
+		fn:       func() {},
+	}
+
+	output := Sdump(tunnel)
+	if !strings.Contains(output, "<ptr") || !strings.Contains(output, "<chan") || !strings.Contains(output, "<func") {
+		t.Errorf("Sdump output should contain type/address placeholders for unsupported fields, got: %s", output)
+	}
+	fmt.Println(output)
+	fmt.Println(gspew.Sdump(tunnel))
 }

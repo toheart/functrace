@@ -10,13 +10,13 @@ import (
 
 // ParamRepository 是SQLite实现的参数数据仓储
 type ParamRepository struct {
-	db     *sql.DB
+	db *sql.DB
 }
 
 // NewParamRepository 创建一个新的SQLite参数数据仓储
 func NewParamRepository(db *sql.DB) domain.ParamRepository {
 	return &ParamRepository{
-		db:     db,
+		db: db,
 	}
 }
 
@@ -60,4 +60,60 @@ func (r *ParamRepository) FindParamsByTraceID(traceId int64) ([]model.ParamStore
 	}
 
 	return result, nil
+}
+
+// SaveParamCache 保存参数缓存
+func (r *ParamRepository) SaveParamCache(cache *model.ParamCache) (int64, error) {
+	result, err := r.db.Exec(
+		SQLInsertParamCache,
+		cache.Addr,
+		cache.TraceID,
+		cache.BaseID,
+		cache.Data,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("save param cache error: %w", err)
+	}
+
+	return result.LastInsertId()
+}
+
+// FindParamCacheByAddr 根据地址查找参数缓存
+func (r *ParamRepository) FindParamCacheByAddr(addr string) (*model.ParamCache, error) {
+	row := r.db.QueryRow(SQLSelectParamCacheByAddr, addr)
+
+	var cache model.ParamCache
+	err := row.Scan(&cache.ID, &cache.Addr, &cache.TraceID, &cache.BaseID, &cache.Data)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // 没有找到缓存，返回 nil
+		}
+		return nil, fmt.Errorf("find param cache by addr error: %w", err)
+	}
+
+	return &cache, nil
+}
+
+// DeleteParamCacheByTraceID 根据跟踪ID删除参数缓存
+func (r *ParamRepository) DeleteParamCacheByTraceID(traceId int64) error {
+	_, err := r.db.Exec(SQLDeleteParamCacheByTraceID, traceId)
+	if err != nil {
+		return fmt.Errorf("delete param cache by trace id error: %w", err)
+	}
+	return nil
+}
+
+// UpdateParamCache 更新参数缓存
+func (r *ParamRepository) UpdateParamCache(cache *model.ParamCache) error {
+	_, err := r.db.Exec(
+		SQLUpdateParamCache,
+		cache.TraceID,
+		cache.BaseID,
+		cache.Data,
+		cache.Addr,
+	)
+	if err != nil {
+		return fmt.Errorf("update param cache error: %w", err)
+	}
+	return nil
 }

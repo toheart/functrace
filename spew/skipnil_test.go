@@ -69,9 +69,8 @@ func TestSkipNilValues(t *testing.T) {
 
 	// 使用自定义配置（跳过nil值）
 	cs := spew.ConfigState{
-		Indent:           " ",
-		EnableJSONOutput: true,
-		SkipNilValues:    true,
+		Indent:        " ",
+		SkipNilValues: true,
 	}
 	skipNilJSON := cs.ToJSON(testData)
 	t.Logf("SkipNil JSON output: %s", skipNilJSON)
@@ -118,9 +117,8 @@ func TestSkipNilValuesInSlice(t *testing.T) {
 
 	// 使用自定义配置（跳过nil值）
 	cs := spew.ConfigState{
-		Indent:           " ",
-		EnableJSONOutput: true,
-		SkipNilValues:    true,
+		Indent:        " ",
+		SkipNilValues: true,
 	}
 	skipNilJSON := cs.ToJSON(slice)
 	t.Logf("SkipNil slice JSON output: %s", skipNilJSON)
@@ -152,9 +150,8 @@ func TestSkipNilValuesInMap(t *testing.T) {
 
 	// 使用自定义配置（跳过nil值）
 	cs := spew.ConfigState{
-		Indent:           " ",
-		EnableJSONOutput: true,
-		SkipNilValues:    true,
+		Indent:        " ",
+		SkipNilValues: true,
 	}
 	skipNilJSON := cs.ToJSON(m)
 	t.Logf("SkipNil map JSON output: %s", skipNilJSON)

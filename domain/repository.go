@@ -23,6 +23,18 @@ type ParamRepository interface {
 
 	// FindParamsByTraceID 根据跟踪ID查找参数
 	FindParamsByTraceID(traceId int64) ([]model.ParamStoreData, error)
+
+	// SaveParamCache 保存参数缓存
+	SaveParamCache(cache *model.ParamCache) (int64, error)
+
+	// FindParamCacheByAddr 根据地址查找参数缓存
+	FindParamCacheByAddr(addr string) (*model.ParamCache, error)
+
+	// DeleteParamCacheByTraceID 根据跟踪ID删除参数缓存
+	DeleteParamCacheByTraceID(traceId int64) error
+
+	// UpdateParamCache 更新参数缓存
+	UpdateParamCache(cache *model.ParamCache) error
 }
 
 // GoroutineRepository 协程数据仓储接口

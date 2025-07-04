@@ -38,16 +38,33 @@ const (
 		baseId INTEGER
 	)`
 
-	SQLCreateGIDIndex        = "CREATE INDEX IF NOT EXISTS idx_gid ON TraceData (gid)"
-	SQLCreateParentIndex     = "CREATE INDEX IF NOT EXISTS idx_parent ON TraceData (parentId)"
-	SQLCreateParamTraceIndex = "CREATE INDEX IF NOT EXISTS idx_param_trace ON ParamStore (traceId)"
-	SQLCreateParamBaseIndex  = "CREATE INDEX IF NOT EXISTS idx_param_base ON ParamStore (baseId)"
+	// 参数缓存表创建语句
+	SQLCreateParamCacheTable = `CREATE TABLE IF NOT EXISTS ParamCache (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, 
+		addr TEXT UNIQUE, 
+		traceId INTEGER, 
+		baseId INTEGER, 
+		data TEXT
+	)`
+
+	SQLCreateGIDIndex             = "CREATE INDEX IF NOT EXISTS idx_gid ON TraceData (gid)"
+	SQLCreateParentIndex          = "CREATE INDEX IF NOT EXISTS idx_parent ON TraceData (parentId)"
+	SQLCreateParamTraceIndex      = "CREATE INDEX IF NOT EXISTS idx_param_trace ON ParamStore (traceId)"
+	SQLCreateParamBaseIndex       = "CREATE INDEX IF NOT EXISTS idx_param_base ON ParamStore (baseId)"
+	SQLCreateParamCacheAddrIndex  = "CREATE INDEX IF NOT EXISTS idx_param_cache_addr ON ParamCache (addr)"
+	SQLCreateParamCacheTraceIndex = "CREATE INDEX IF NOT EXISTS idx_param_cache_trace ON ParamCache (traceId)"
 
 	SQLInsertTrace    = "INSERT INTO TraceData (id, name, gid, indent, paramsCount, parentId, createdAt, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 	SQLUpdateTimeCost = "UPDATE TraceData SET timeCost = ?, isFinished = ? WHERE id = ?"
 
 	// 参数表操作语句
 	SQLInsertParam = "INSERT INTO ParamStore (traceId, position, data, isReceiver, baseId) VALUES (?, ?, ?, ?, ?)"
+
+	// 参数缓存表操作语句
+	SQLInsertParamCache          = "INSERT OR REPLACE INTO ParamCache (addr, traceId, baseId, data) VALUES (?, ?, ?, ?)"
+	SQLUpdateParamCache          = "UPDATE ParamCache SET traceId = ?, baseId = ?, data = ? WHERE addr = ?"
+	SQLSelectParamCacheByAddr    = "SELECT id, addr, traceId, baseId, data FROM ParamCache WHERE addr = ?"
+	SQLDeleteParamCacheByTraceID = "DELETE FROM ParamCache WHERE traceId = ?"
 
 	// Goroutine表操作语句
 	SQLInsertGoroutine         = "INSERT INTO GoroutineTrace (id, originGid, createTime, isFinished, initFuncName) VALUES (?, ?, ?, ?, ?)"

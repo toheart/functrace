@@ -1,131 +1,260 @@
-# FuncTrace 函数跟踪库
+# FuncTrace - Go Function Tracing and Performance Analysis Library
 
-FuncTrace 是一个用于跟踪和分析 Go 函数调用的工具库。本项目采用领域驱动设计 (DDD) 架构，将业务逻辑与基础设施分离，提高了代码的可测试性和可维护性。
+[![Go Version](https://img.shields.io/badge/Go-%3E%3D1.19-blue)](https://golang.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-## 项目架构
+FuncTrace is a comprehensive Go library designed for tracking and analyzing function calls in Go applications. Built with Domain-Driven Design (DDD) architecture, it provides detailed insights into function execution patterns, performance metrics, and goroutine lifecycles.
 
-项目采用分层架构，主要包括以下几个核心模块：
+**[中文文档 / Chinese Documentation](README_zh.md)**
 
-### 领域层 (Domain)
+## Features
 
-领域层包含业务核心概念和规则，独立于基础设施和应用层：
+### 🔍 Function Call Tracing
+- **Decorator Pattern**: Automatic function entry/exit tracking with simple decorator syntax
+- **Call Chain Analysis**: Complete parent-child relationship mapping for nested function calls
+- **Execution Timing**: Precise CPU execution time measurement for each function
+- **Hierarchical Display**: Automatic indentation based on call depth for clear visualization
 
-- `domain/model/`: 包含领域实体和值对象，例如 `TraceData`、`ParamStoreData` 和 `GoroutineTrace`
-- `domain/repository.go`: 定义仓储接口，用于数据持久化操作
+### 📊 Parameter Storage System
+Three flexible parameter storage modes to balance functionality and memory usage:
 
-### 应用层 (App)
+#### `none` Mode (Default - Memory Efficient)
+- Records only function call chains and execution times
+- Minimal memory footprint, ideal for production environments
+- Best for performance monitoring without detailed debugging
 
-应用层协调领域对象和仓储，实现业务用例：
+#### `normal` Mode (Balanced)
+- Captures parameters for regular functions and value receiver methods
+- Moderate memory usage, suitable for development environments
+- Good balance between debugging capability and resource consumption
 
-- `app/app.go`: 提供应用服务，协调仓储和领域对象的交互
+#### `all` Mode (Complete Debugging)
+- Records all parameters including complex object changes
+- Uses JSON Patch technology for incremental storage of pointer receiver changes, greatly reducing redundant data and improving efficiency for large object tracking
+- Highest memory usage, ideal for detailed problem analysis
+- Includes built-in memory protection mechanisms
 
-### 基础设施层 (Infrastructure)
+### 🚀 Goroutine Monitoring
+- **Real-time Tracking**: Monitor creation, execution, and termination of goroutines
+- **Lifecycle Management**: Automatic recording of total goroutine execution times
+- **Background Cleanup**: Periodic background tasks to clean up finished goroutine traces
+- **State Synchronization**: Thread-safe goroutine state management
+- **Main Exit Data Safety**: On `main.main` exit, automatically waits for all trace data to be persisted, ensuring data integrity
 
-基础设施层提供领域模型的实现和技术服务：
+### 🛡️ Memory Protection
+- **Memory Monitor**: Automatic memory usage monitoring in `all` mode
+- **Threshold Protection**: Default 2GB memory limit with emergency exit to prevent OOM
+- **Smart Alerts**: Clear error messages and solution suggestions
+- **Configurable Limits**: Customizable memory thresholds via environment variables
 
-- `persistence/`: 持久化相关实现
-  - `factory/`: 包含仓储工厂和数据库接口定义
-    - `factory.go`: 统一管理数据库实例和仓储工厂的创建、初始化和资源释放
-  - `sqlite/`: SQLite 实现
-  - `mock/`: 测试用的模拟实现
+### 💾 Data Persistence
+Repository pattern supporting multiple storage backends:
 
-## 核心流程
+#### SQLite Storage (Default)
+- Three main tables: `TraceData`, `GoroutineTrace`, `ParamStoreData`
+- Support for both synchronous and asynchronous insertion modes
+- Automatic index creation for optimized query performance
+- WAL mode for improved concurrent access
 
-1. 创建应用实例 (`app.NewTraceApp`)
-2. 获取仓储 (`app.GetTraceRepository()`)
-3. 使用领域模型和仓储进行业务操作
-4. 关闭应用 (`app.Close()`)，工厂会自动释放资源
+#### Memory Storage
+- Mock implementation for testing purposes
+- High-speed in-memory operations
+- Perfect for unit testing and development
 
-## 使用示例
+### 🔧 Intelligent Parameter Serialization
+Enhanced spew package with:
+- **JSON Output**: Structured JSON format for complex objects
+- **Memory Pool Optimization**: Object pooling to reduce memory allocation overhead
+- **Type Safety**: Safe handling of all Go data types including unsafe operations
+- **Circular Reference Detection**: Prevention of infinite recursion and stack overflow
+- **Advanced Type Support**: Now supports interface, pointer, and byte array types
+- **Improved MaxDepth Truncation**: Truncation output now includes detailed metadata (`__truncated__`, `num_fields`, `length`, `type`) for easier debugging
 
-参考 `examples/usage_example.go` 了解如何使用新的架构：
+## Installation
 
-```go
-// 初始化应用
-traceApp, err := app.NewTraceApp(logger)
-if err != nil {
-    logger.WithError(err).Fatal("创建应用程序实例失败")
-    return
-}
-defer traceApp.Close()
-
-// 获取仓储
-traceRepo := traceApp.GetTraceRepository()
-
-// 创建并保存跟踪数据
-traceData := model.NewTraceData(...)
-traceID, err := traceRepo.SaveTrace(traceData)
+```bash
+go get github.com/toheart/functrace
 ```
 
-## 设计优势
+## Quick Start
 
-1. **关注点分离**：领域逻辑与技术细节分离
-2. **可测试性**：仓储接口可以轻松实现模拟版本
-3. **可扩展性**：容易添加新的存储类型和业务功能
-4. **维护性**：代码结构清晰，责任边界明确
-5. **资源管理**：工厂模式负责资源生命周期，简化应用程序
-6. **结构优化**：将工厂和数据库接口整合到persistence下，更符合DDD分层原则
+### Basic Usage
 
-## 功能
+```go
+package main
 
-- **函数跟踪**：使用装饰器模式跟踪函数的进入和退出，记录参数、执行时间等信息。
-- **goroutine 监控**：定期检查正在运行的 goroutine，记录其执行时间和状态。
-- **数据库支持**：将跟踪数据存储在 SQLite 数据库中，支持异步插入和更新操作。
+import (
+    "time"
+    "github.com/toheart/functrace"
+)
 
-## 数据库结构
+func ExampleFunction(name string, count int) {
+    defer functrace.Trace([]interface{}{name, count})()
+    
+    // Your function logic here
+    for i := 0; i < count; i++ {
+        processItem(name, i)
+    }
+}
 
-### TraceData 表
+func processItem(name string, index int) {
+    defer functrace.Trace([]interface{}{name, index})()
+    
+    // Processing logic
+    time.Sleep(10 * time.Millisecond)
+}
 
-- `id`: 唯一标识符
-- `name`: 函数名称
-- `gid`: goroutine ID
-- `indent`: 缩进级别
-- `params`: 参数 JSON 字符串
-- `timeCost`: CPU 执行时间
-- `parentId`: 父函数 ID
-- `createdAt`: 创建时间
-- `seq`: 序列号
+func main() {
+    defer functrace.CloseTraceInstance()
+    
+    ExampleFunction("test", 3)
+}
+```
 
-### GoroutineTrace 表
+### Advanced Configuration
 
-- `id`: 自增 ID
-- `gid`: goroutine ID
-- `timeCost`: CPU 执行时间
-- `execTime`: 总运行时间
-- `createTime`: 创建时间
-- `isFinished`: 是否完成
-- `initFuncName`: 初始函数名称
+```go
+package main
 
-## 环境变量
+import (
+    "os"
+    "github.com/toheart/functrace"
+)
 
-- `TRACE_CHANNEL_COUNT`: 设置异步数据库操作的通道数量，默认为 10。
-- `IGNORE_NAMES`: 定义默认忽略的函数名称关键字，多个名称用逗号分隔。
-- `GOROUTINE_MONITOR_INTERVAL`: 设置监控 goroutine 运行时间的间隔，单位为秒，默认为 60 秒。
-- `ENV_DB_INSERT_MODE`: 设置数据库插入模式，支持 "sync"(同步模式，默认) 和 "async"(异步模式)。
+func main() {
+    // Configure parameter storage mode
+    os.Setenv("FUNCTRACE_PARAM_STORE_MODE", "normal")
+    
+    // Configure async database operations
+    os.Setenv("ENV_DB_INSERT_MODE", "async")
+    
+    // Configure memory limit (2GB)
+    os.Setenv("FUNCTRACE_MEMORY_LIMIT", "2147483648")
+    
+    defer functrace.CloseTraceInstance()
+    
+    // Your application logic
+    YourApplicationLogic()
+}
+```
 
-## 使用方法
+## Configuration
 
-1. 初始化跟踪实例：
-   ```go
-   instance := NewTraceInstance()
-   ```
+FuncTrace supports configuration through environment variables:
 
-2. 使用 `Trace` 装饰器跟踪函数：
-   ```go
-   func MyFunction() {
-       defer Trace(nil)() // 记录函数调用
-       // 函数逻辑
-   }
-   ```
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `FUNCTRACE_PARAM_STORE_MODE` | `none` | Parameter storage mode: `none`/`normal`/`all` |
+| `ENV_DB_INSERT_MODE` | `sync` | Database insertion mode: `sync`/`async` |
+| `FUNCTRACE_MEMORY_LIMIT` | `2147483648` | Memory limit in bytes (2GB default) |
+| `FUNCTRACE_IGNORE_NAMES` | `log,context,string` | Comma-separated function name keywords to ignore |
+| `FUNCTRACE_GOROUTINE_MONITOR_INTERVAL` | `10` | Goroutine monitoring interval in seconds |
+| `FUNCTRACE_MAX_DEPTH` | `3` | Maximum tracing depth |
 
-3. 监控 goroutine：
-   - 监控功能会自动启动，定期检查 goroutine 的状态并更新数据库。
+## Parameter Storage Modes Comparison
 
-## 注意事项
+| Mode | Memory Usage | Features | Use Case |
+|------|-------------|----------|----------|
+| `none` | Minimal | Function call chains + execution times | test monitoring |
+| `normal` | Moderate | Regular function parameters + value methods | Development debugging |
+| `all` | High | All parameters + pointer receiver diffs | Detailed problem analysis |
 
-- 确保在使用前正确配置数据库连接和环境变量。
-- 监控功能会在后台运行，可能会影响性能，建议在生产环境中谨慎使用。
+## Database Schema
 
-## 贡献
+### TraceData Table
+- `id`: Unique identifier
+- `name`: Function name
+- `gid`: Goroutine ID
+- `indent`: Indentation level
+- `paramsCount`: Number of parameters
+- `timeCost`: CPU execution time
+- `parentId`: Parent function ID
+- `createdAt`: Creation timestamp
+- `isFinished`: Completion status
+- `seq`: Sequence number
 
-欢迎提交问题和贡献代码！请遵循贡献指南。
+### GoroutineTrace Table
+- `id`: Auto-increment ID
+- `originGid`: Original Goroutine ID
+- `timeCost`: CPU execution time
+- `createTime`: Creation time
+- `isFinished`: Completion status
+- `initFuncName`: Initial function name
+
+### ParamStoreData Table
+- `id`: Unique identifier
+- `traceId`: Associated TraceData ID
+- `position`: Parameter position
+- `data`: Parameter JSON data
+- `isReceiver`: Whether it's a receiver parameter
+- `baseId`: Base parameter ID (for incremental storage)
+
+## Architecture
+
+FuncTrace follows a clean layered architecture:
+
+```
+API Layer (functrace.go)
+    ↓
+Core Layer (trace package)
+    ↓
+Domain Layer (domain package)
+    ↓
+Persistence Layer (persistence package)
+```
+
+### Key Components
+
+- **API Layer**: Simple external interface (`functrace.go`)
+- **Core Layer**: Main tracing logic (`trace/`)
+- **Domain Layer**: Business models and repository interfaces (`domain/`)
+- **Persistence Layer**: Data storage implementations (`persistence/`)
+
+## Performance Considerations
+
+### Memory Optimization
+- Object pooling for reduced garbage collection
+- Configurable memory limits with automatic protection
+- Efficient JSON serialization with incremental storage
+
+### Database Optimization
+- Asynchronous insertion mode for high-throughput scenarios
+- Proper indexing for fast queries
+- Connection pooling and WAL mode for SQLite
+
+### Concurrency Safety
+- Thread-safe goroutine state management
+- Lock-free atomic operations where possible
+- Proper synchronization for shared data structures
+
+## Best Practices
+
+1. **Production Use**: Use `none` parameter mode with `async` database mode
+2. **Development**: Use `normal` parameter mode for balanced debugging
+3. **Deep Debugging**: Use `all` parameter mode with memory monitoring
+4. **Resource Management**: Always call `functrace.CloseTraceInstance()` before exit
+5. **Selective Tracing**: Use ignore patterns to exclude frequently called functions
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Support
+
+- **Documentation**: [Wiki](https://github.com/toheart/functrace/wiki)
+- **Issues**: [GitHub Issues](https://github.com/toheart/functrace/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/toheart/functrace/discussions)
+
+## Acknowledgments
+
+- Built with [spew](https://github.com/davecgh/go-spew) for advanced data serialization
+- Uses [SQLite](https://sqlite.org/) for efficient data persistence
+- Inspired by various Go profiling and tracing tools
+
+## Testing & Coverage
+
+All core features are covered by unit tests (target coverage 80%+). Use `go test -cover` to check coverage.

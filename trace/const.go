@@ -14,6 +14,14 @@ const (
 	// LogFileName 日志文件名
 	LogFileName = "./functrace.log"
 
+	// 内存监控相关常量
+	// DefaultMemoryLimit 默认内存限制：2GB
+	DefaultMemoryLimit = 2 * 1024 * 1024 * 1024
+	// DefaultMemoryCheckInterval 内存监控间隔：5秒
+	DefaultMemoryCheckInterval = 5
+	// EnvMemoryLimit 内存限制环境变量
+	EnvMemoryLimit = "FUNCTRACE_MEMORY_LIMIT"
+
 	// EnvIgnoreNames 忽略的函数名列表环境变量
 	EnvIgnoreNames = "FUNCTRACE_IGNORE_NAMES"
 
@@ -29,6 +37,10 @@ const (
 	// 可选值: "sync"(同步模式，默认), "async"(异步模式)
 	EnvDBInsertMode = "ENV_DB_INSERT_MODE"
 
+	// EnvParamStoreMode 参数存储模式环境变量
+	// 可选值: "none"(不保存参数，默认), "normal"(保存普通参数), "all"(全保存)
+	EnvParamStoreMode = "FUNCTRACE_PARAM_STORE_MODE"
+
 	IgnoreNames = "log,context,string"
 	// 默认最大深度
 	DefaultMaxDepth = 3
@@ -42,6 +54,16 @@ const (
 	AsyncMode = "async"
 	// 同步插入模式
 	SyncMode = "sync"
+)
+
+// 参数存储模式
+const (
+	// 不保存参数（默认模式，内存友好）
+	ParamStoreModeNone = "none"
+	// 保存普通参数（不包括指针接收者的复杂参数处理）
+	ParamStoreModeNormal = "normal"
+	// 全保存（包括所有参数和指针接收者的diff处理）
+	ParamStoreModeAll = "all"
 )
 
 // 方法类型常量

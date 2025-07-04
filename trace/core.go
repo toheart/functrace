@@ -15,37 +15,47 @@ func (t *TraceInstance) EnterTrace(id uint64, name string, params []interface{})
 
 	// 获取跟踪信息和全局ID
 	indent, parentId, traceId := t.prepareTraceInfo(id)
-
+	// 格式化时间序列，保留2位小数
+	duration := time.Since(currentNow)
+	seq := fmt.Sprintf("%.2f", float64(duration.Milliseconds())/1000.0)
 	// 创建跟踪数据
 	traceData := &model.TraceData{
-		ID:          traceId,
-		Name:        name,
-		GID:         id,
-		Indent:      indent,
-		ParamsCount: len(params),
-		ParentId:    parentId,
-		CreatedAt:   startTime.Format(TimeFormat),
-		Seq:         time.Since(currentNow).String(),
+		ID:        traceId,
+		Name:      name,
+		GID:       id,
+		Indent:    indent,
+		ParentId:  parentId,
+		CreatedAt: startTime.Format(TimeFormat),
+		Seq:       seq,
 	}
 
+	// 根据参数存储模式决定是否处理参数
+	funcInfo := t.isStructMethod(name)
+	traceData.MethodType = funcInfo.Type
+
+	if t.config.ParamStoreMode != ParamStoreModeNone {
+		switch funcInfo.Type {
+		case MethodTypeNormal:
+			t.DealNormalMethod(traceId, params)
+		case MethodTypeValue:
+			t.DealValueMethod(traceId, params)
+		case MethodTypePointer:
+			if t.config.ParamStoreMode == ParamStoreModeNormal {
+				// 普通模式下，跳过第一个参数（接收者）
+				params = params[1:]
+				t.DealNormalMethod(traceId, params)
+			} else {
+				t.DealPointerMethod(traceId, params)
+			}
+		}
+	}
+	traceData.ParamsCount = len(params)
 	t.sendOp(&DataOp{
 		OpType: OpTypeInsert,
 		Arg:    traceData,
 	})
-	// 对参数进行处理
-	funcInfo := t.isStructMethod(name)
-	switch funcInfo.Type {
-	case MethodTypeNormal:
-		t.DealNormalMethod(traceId, params)
-	case MethodTypeValue:
-		t.DealValueMethod(traceId, params)
-	case MethodTypePointer:
-		t.DealPointerMethod(traceId, params)
-	}
-
 	// 记录日志
 	t.logFunctionEntry(id, name, indent, parentId, len(params), startTime)
-	traceData.MethodType = funcInfo.Type
 	return traceData, startTime
 }
 
@@ -104,6 +114,21 @@ func (t *TraceInstance) ExitTrace(info *GoroutineInfo, traceData *model.TraceDat
 
 	// 记录日志
 	t.logFunctionExit(info.ID, traceData.Name, indent, duration.String())
+
+	// 检查是否是main.main函数退出，如果是则等待所有数据入库完成
+	if t.isMainFunction(traceData.Name) {
+		t.log.WithFields(logrus.Fields{
+			"function": traceData.Name,
+			"indent":   indent,
+		}).Info("main.main function exiting, ensuring all data is persisted before exit")
+
+		// 直接关闭trace实例，这会自动等待所有数据入库完成
+		if err := t.Close(); err != nil {
+			t.log.WithFields(logrus.Fields{"error": err}).Error("failed to close trace instance")
+		} else {
+			t.log.Info("trace instance closed successfully, all data has been persisted")
+		}
+	}
 }
 
 // updateTraceIndent 更新跟踪缩进并返回当前缩进级别
@@ -205,10 +230,17 @@ func (t *TraceInstance) isStructMethod(fullName string) FuncInfo {
 }
 
 func (t *TraceInstance) SkipFunction(name string) bool {
-	for _, ignoreName := range t.IgnoreNames {
+	for _, ignoreName := range t.config.IgnoreNames {
 		if strings.Contains(name, ignoreName) {
 			return true
 		}
 	}
 	return false
+}
+
+// isMainFunction 检查函数名是否为main.main
+func (t *TraceInstance) isMainFunction(funcName string) bool {
+	// 检查是否为main.main函数
+	// 函数名通常是完整路径，如：main.main 或者 github.com/user/project/main.main
+	return funcName == "main.main" || strings.HasSuffix(funcName, "/main.main")
 }

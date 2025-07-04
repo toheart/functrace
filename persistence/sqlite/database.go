@@ -69,12 +69,15 @@ func (s *SQLiteDatabase) createTablesAndIndexes() error {
 		SQLCreateTraceTable,
 		SQLCreateGoroutineTable,
 		SQLCreateParamTable,
+		SQLCreateParamCacheTable,
 
 		// 创建索引
 		SQLCreateGIDIndex,
 		SQLCreateParentIndex,
 		SQLCreateParamTraceIndex,
 		SQLCreateParamBaseIndex,
+		SQLCreateParamCacheAddrIndex,
+		SQLCreateParamCacheTraceIndex,
 	}
 
 	for _, table := range tables {

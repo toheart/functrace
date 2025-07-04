@@ -10,6 +10,15 @@ type ParamStoreData struct {
 	BaseID     int64  `json:"baseId"`     // 基础参数ID（自关联，当参数为增量存储时使用）
 }
 
+// ParamCache 存储参数缓存信息的结构体
+type ParamCache struct {
+	ID      int64  `json:"id"`      // 唯一标识符
+	Addr    string `json:"addr"`    // 对象地址
+	TraceID int64  `json:"traceId"` // 跟踪ID
+	BaseID  int64  `json:"baseId"`  // 基础参数ID
+	Data    string `json:"data"`    // JSON格式的参数数据
+}
+
 // ReceiverInfo 接收者信息
 type ReceiverInfo struct {
 	BaseID int64  // 基础参数ID
@@ -29,6 +38,22 @@ func NewParamStoreData(traceId int64, position int, data string, isReceiver bool
 
 // WithID 设置ID
 func (p *ParamStoreData) WithID(id int64) *ParamStoreData {
+	p.ID = id
+	return p
+}
+
+// NewParamCache 创建一个新的参数缓存
+func NewParamCache(addr string, traceId int64, baseId int64, data string) *ParamCache {
+	return &ParamCache{
+		Addr:    addr,
+		TraceID: traceId,
+		BaseID:  baseId,
+		Data:    data,
+	}
+}
+
+// WithID 设置ID
+func (p *ParamCache) WithID(id int64) *ParamCache {
 	p.ID = id
 	return p
 }
