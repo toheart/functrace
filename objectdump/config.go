@@ -14,7 +14,14 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-package spew
+package objectdump
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"reflect"
+)
 
 // ConfigState houses the configuration options used by spew to format and
 // display values. Only Indent, MaxDepth, and SkipNilValues are used in the current implementation.
@@ -40,11 +47,47 @@ type ConfigState struct {
 
 	// MaxElementsPerContainer specifies the maximum number of elements to include in a container before truncating.
 	MaxElementsPerContainer int
+
+	// AllowUnexported specifies whether to access and dump unexported fields
+	// of structs. This requires using the unsafe package and is enabled by
+	// default to maintain behavior, but can be disabled for safety.
+	AllowUnexported bool
+
+	// CompactLargeObjects specifies whether to compact large built-in objects
+	// (like time.Time, net.Conn, etc.) into simple string representations.
+	// When enabled, these objects will be shown as "<TypeName>" or their
+	// string representation instead of full internal structure.
+	// This is enabled by default to avoid extremely large outputs.
+	CompactLargeObjects bool
 }
 
 // Config is the active configuration of the top-level functions.
-var Config = ConfigState{Indent: " ", MaxElementsPerContainer: 1000}
+var Config = ConfigState{Indent: " ", MaxElementsPerContainer: 1000, AllowUnexported: true, CompactLargeObjects: true}
 
 func SetGlobalConfig(config *ConfigState) {
 	Config = *config
+}
+
+// ToJSON returns a JSON string representation of the passed arguments using this configuration.
+func (cs *ConfigState) ToJSON(a ...interface{}) string {
+	if len(a) == 0 {
+		return "{}"
+	}
+
+	d := getDumpState(cs)
+	result := d.dump(reflect.ValueOf(a[0]))
+	putDumpState(d)
+
+	// Ensure the final output is always a JSON object for consistency.
+	if _, ok := result.(map[string]interface{}); !ok {
+		result = map[string]interface{}{"value": result}
+	}
+
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(result); err != nil {
+		return fmt.Sprintf(`{"error": "failed to marshal dumped object: %s"}`, err.Error())
+	}
+	return buf.String()
 }

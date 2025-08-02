@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/toheart/functrace/spew"
+	objDump "github.com/toheart/functrace/objectdump"
 )
 
 // Config 统一的配置结构体
@@ -27,8 +27,11 @@ type Config struct {
 	ParamStoreMode string // 参数存储模式：none/normal/all
 
 	// 日志配置
-	LogFileName             string // 日志文件名
-	MaxElementsPerContainer int    // 新增：单个容器最大递归元素数，默认20
+	LogFileName string // 日志文件名
+
+	// 对象序列化配置
+	MaxElementsPerContainer int  // 单个容器最大递归元素数
+	AllowUnexportedParams   bool // 是否允许序列化未导出字段
 }
 
 // configField 配置字段定义
@@ -97,7 +100,7 @@ var configFields = map[string]configField{
 	},
 	"ParamStoreMode": {
 		envKey:       EnvParamStoreMode,
-		defaultValue: ParamStoreModeNone,
+		defaultValue: ParamStoreModeAll,
 		validator: func(v string) bool {
 			return v == ParamStoreModeNone || v == ParamStoreModeNormal || v == ParamStoreModeAll
 		},
@@ -113,6 +116,14 @@ var configFields = map[string]configField{
 				return true
 			}
 			return false
+		},
+	},
+	"AllowUnexportedParams": {
+		envKey:       "FUNCTRACE_ALLOW_UNEXPORTED",
+		defaultValue: true,
+		validator: func(v string) bool {
+			_, err := strconv.ParseBool(v)
+			return err == nil
 		},
 	},
 }
@@ -157,6 +168,9 @@ func (c *Config) loadFromEnv() {
 	c.ParamStoreMode = c.getStringEnv("ParamStoreMode")
 
 	c.MaxElementsPerContainer = c.getIntEnv("MaxElementsPerContainer")
+
+	// 是否允许序列化未导出字段
+	c.AllowUnexportedParams = c.getBoolEnv("AllowUnexportedParams")
 }
 
 // getStringEnv 获取字符串环境变量
@@ -221,6 +235,25 @@ func (c *Config) getUint64Env(fieldName string) uint64 {
 	return field.defaultValue.(uint64)
 }
 
+// getBoolEnv 获取布尔值环境变量
+func (c *Config) getBoolEnv(fieldName string) bool {
+	field := configFields[fieldName]
+	envValue := os.Getenv(field.envKey)
+
+	// 如果环境变量为空，返回默认值
+	if envValue == "" {
+		return field.defaultValue.(bool)
+	}
+
+	// 尝试转换为布尔值
+	if boolValue, err := strconv.ParseBool(envValue); err == nil {
+		return boolValue
+	}
+
+	// 转换失败，返回默认值
+	return field.defaultValue.(bool)
+}
+
 // getStringSliceEnv 获取字符串切片环境变量
 func (c *Config) getStringSliceEnv(fieldName string) []string {
 	field := configFields[fieldName]
@@ -235,11 +268,12 @@ func (c *Config) getStringSliceEnv(fieldName string) []string {
 }
 
 // CreateSpewConfig 根据配置创建spew配置
-func (c *Config) CreateSpewConfig() *spew.ConfigState {
-	return &spew.ConfigState{
-		MaxDepth:                c.MaxDepth, // 从业务角度，需要多一层
-		SkipNilValues:           true,
+func (c *Config) CreateSpewConfig() *objDump.ConfigState {
+	return &objDump.ConfigState{
+		MaxDepth:                c.MaxDepth,
+		SkipNilValues:           false,
 		MaxElementsPerContainer: c.MaxElementsPerContainer,
+		AllowUnexported:         c.AllowUnexportedParams,
 	}
 }
 

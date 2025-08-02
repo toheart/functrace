@@ -2,6 +2,7 @@ package memory
 
 import (
 	"github.com/sirupsen/logrus"
+	"github.com/toheart/functrace/domain"
 	"github.com/toheart/functrace/domain/model"
 )
 
@@ -40,6 +41,8 @@ func (r *MemTraceRepository) FindRootFunctionsByGID(gid uint64) ([]model.TraceDa
 	}, nil
 }
 
+var _ domain.ParamRepository = (*MemParamRepository)(nil)
+
 // MemParamRepository 实现参数仓储的Mock
 type MemParamRepository struct {
 	logger *logrus.Logger
@@ -49,7 +52,7 @@ type MemParamRepository struct {
 func (r *MemParamRepository) FindParamsByTraceID(traceId int64) ([]model.ParamStoreData, error) {
 	r.logger.WithField("traceId", traceId).Info("Mock查找参数")
 	return []model.ParamStoreData{
-		*model.NewParamStoreData(1, 0, "MockParam", false, 0),
+		*model.NewParamStoreData(1, 0, []byte("MockParam"), false, 0),
 	}, nil
 }
 
@@ -76,17 +79,16 @@ func (r *MemParamRepository) SaveParamCache(cache *model.ParamCache) (int64, err
 func (r *MemParamRepository) FindParamCacheByAddr(addr string) (*model.ParamCache, error) {
 	r.logger.WithField("addr", addr).Info("Mock查找参数缓存")
 	return &model.ParamCache{
-		ID:      1,
-		Addr:    addr,
-		TraceID: 1,
-		BaseID:  1,
-		Data:    "MockCacheData",
+		ID:     1,
+		Addr:   addr,
+		BaseID: 1,
+		Data:   []byte("MockCacheData"),
 	}, nil
 }
 
-// DeleteParamCacheByTraceID 根据跟踪ID删除参数缓存
-func (r *MemParamRepository) DeleteParamCacheByTraceID(traceId int64) error {
-	r.logger.WithField("traceId", traceId).Info("Mock删除参数缓存")
+// DeleteParamCacheByAddr 根据地址删除参数缓存
+func (r *MemParamRepository) DeleteParamCacheByAddr(addr string) error {
+	r.logger.WithField("addr", addr).Info("Mock删除参数缓存")
 	return nil
 }
 

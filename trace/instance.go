@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -12,8 +13,8 @@ import (
 	"github.com/sourcegraph/conc/pool"
 	"github.com/toheart/functrace/domain"
 	"github.com/toheart/functrace/domain/model"
+	objDump "github.com/toheart/functrace/objectdump"
 	"github.com/toheart/functrace/persistence/factory"
-	"github.com/toheart/functrace/spew"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -40,13 +41,6 @@ type GoroutineInfo struct {
 	LastUpdateTime string `json:"lastUpdateTime"` // 最后更新时间
 }
 
-// receiverInfo 接收者信息
-type receiverInfo struct {
-	TraceID int64  // 跟踪ID
-	BaseID  int64  // 基础参数ID
-	Data    string // JSON格式的参数数据
-}
-
 // DataOp 数据操作
 type DataOp struct {
 	OpType OpType
@@ -64,12 +58,15 @@ type TraceInstance struct {
 	closed           bool                      // 标志位表示是否已关闭
 	GoroutineRunning map[uint64]*GoroutineInfo // 管理运行中的goroutine, key为gid, value为数据库id
 
-	OpChan    chan *DataOp
-	dataClose chan struct{}
-	config    *Config // 统一的配置管理
+	paramCacheLock sync.RWMutex
+	OpChan         chan *DataOp
+	dataClose      chan struct{}
+	config         *Config // 统一的配置管理
 
 	// 内存监控器
 	memoryMonitor *MemoryMonitor
+	// TTL缓存管理器
+	ttlManager *TTLCacheManager
 }
 
 // NewTraceInstance 初始化并返回 TraceInstance 的单例实例
@@ -91,8 +88,13 @@ func NewTraceInstance() *TraceInstance {
 		go instance.monitorGoroutines()
 		instance.log.Info("start goroutine monitor")
 
-		// 根据参数存储模式决定是否启动内存监控器
+		// 根据参数存储模式决定是否启动相关服务
+		if instance.config.ParamStoreMode == ParamStoreModeAll {
+			// 启动TTL缓存管理器
+			instance.ttlManager.Start()
+		}
 		if instance.config.ParamStoreMode != ParamStoreModeNone {
+			// 启动内存监控器
 			instance.memoryMonitor.Start()
 			instance.log.WithFields(logrus.Fields{
 				"memory_limit":   humanReadableBytes(instance.config.MemoryLimit),
@@ -129,6 +131,9 @@ func initTraceInstance() {
 		dataClose:        make(chan struct{}),
 		config:           config,
 	}
+
+	// 初始化TTL缓存管理器
+	instance.ttlManager = NewTTLCacheManager(instance.log)
 
 	// 初始化内存监控器
 	instance.memoryMonitor = NewMemoryMonitor(
@@ -200,6 +205,14 @@ func initializeLogger() *logrus.Logger {
 		DisableTimestamp: false,
 	})
 
+	// 默认删除旧的日志文件
+	if err := os.Remove(LogFileName); err != nil && !os.IsNotExist(err) {
+		// 如果删除失败且不是因为文件不存在，记录警告
+		log.Warnf("Failed to clear log file %s: %v", LogFileName, err)
+	} else {
+		log.Infof("Cleared log file: %s", LogFileName)
+	}
+
 	// 配置日志输出到lumberjack用于日志轮转
 	logWriter := &lumberjack.Logger{
 		Filename:  LogFileName,
@@ -263,6 +276,11 @@ func (t *TraceInstance) Close() error {
 
 	// 发送停止监控信号
 	close(stopMonitor)
+
+	// 停止TTL缓存管理器
+	if t.config.ParamStoreMode == ParamStoreModeAll {
+		t.ttlManager.Stop()
+	}
 
 	// 停止内存监控器
 	if t.memoryMonitor != nil && t.memoryMonitor.IsEnabled() {
@@ -371,5 +389,5 @@ func (t *TraceInstance) GetIgnoreNames() []string {
 
 // GetSpewConfig 获取spew配置
 func (t *TraceInstance) SetSpewConfig() {
-	spew.SetGlobalConfig(t.config.CreateSpewConfig())
+	objDump.SetGlobalConfig(t.config.CreateSpewConfig())
 }

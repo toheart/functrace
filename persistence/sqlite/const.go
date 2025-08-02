@@ -33,7 +33,7 @@ const (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, 
 		traceId INTEGER, 
 		position INTEGER, 
-		data TEXT, 
+		data BLOB, 
 		isReceiver BOOLEAN, 
 		baseId INTEGER
 	)`
@@ -42,9 +42,8 @@ const (
 	SQLCreateParamCacheTable = `CREATE TABLE IF NOT EXISTS ParamCache (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, 
 		addr TEXT UNIQUE, 
-		traceId INTEGER, 
 		baseId INTEGER, 
-		data TEXT
+		data BLOB
 	)`
 
 	SQLCreateGIDIndex             = "CREATE INDEX IF NOT EXISTS idx_gid ON TraceData (gid)"
@@ -52,7 +51,6 @@ const (
 	SQLCreateParamTraceIndex      = "CREATE INDEX IF NOT EXISTS idx_param_trace ON ParamStore (traceId)"
 	SQLCreateParamBaseIndex       = "CREATE INDEX IF NOT EXISTS idx_param_base ON ParamStore (baseId)"
 	SQLCreateParamCacheAddrIndex  = "CREATE INDEX IF NOT EXISTS idx_param_cache_addr ON ParamCache (addr)"
-	SQLCreateParamCacheTraceIndex = "CREATE INDEX IF NOT EXISTS idx_param_cache_trace ON ParamCache (traceId)"
 
 	SQLInsertTrace    = "INSERT INTO TraceData (id, name, gid, indent, paramsCount, parentId, createdAt, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 	SQLUpdateTimeCost = "UPDATE TraceData SET timeCost = ?, isFinished = ? WHERE id = ?"
@@ -61,10 +59,9 @@ const (
 	SQLInsertParam = "INSERT INTO ParamStore (traceId, position, data, isReceiver, baseId) VALUES (?, ?, ?, ?, ?)"
 
 	// 参数缓存表操作语句
-	SQLInsertParamCache          = "INSERT OR REPLACE INTO ParamCache (addr, traceId, baseId, data) VALUES (?, ?, ?, ?)"
-	SQLUpdateParamCache          = "UPDATE ParamCache SET traceId = ?, baseId = ?, data = ? WHERE addr = ?"
-	SQLSelectParamCacheByAddr    = "SELECT id, addr, traceId, baseId, data FROM ParamCache WHERE addr = ?"
-	SQLDeleteParamCacheByTraceID = "DELETE FROM ParamCache WHERE traceId = ?"
+	SQLInsertParamCache       = "INSERT OR REPLACE INTO ParamCache (addr, baseId, data) VALUES (?, ?, ?)"
+	SQLSelectParamCacheByAddr = "SELECT id, addr, baseId, data FROM ParamCache WHERE addr = ?"
+	SQLDeleteParamCacheByAddr = "DELETE FROM ParamCache WHERE addr = ?"
 
 	// Goroutine表操作语句
 	SQLInsertGoroutine         = "INSERT INTO GoroutineTrace (id, originGid, createTime, isFinished, initFuncName) VALUES (?, ?, ?, ?, ?)"

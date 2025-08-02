@@ -67,7 +67,6 @@ func (r *ParamRepository) SaveParamCache(cache *model.ParamCache) (int64, error)
 	result, err := r.db.Exec(
 		SQLInsertParamCache,
 		cache.Addr,
-		cache.TraceID,
 		cache.BaseID,
 		cache.Data,
 	)
@@ -83,7 +82,7 @@ func (r *ParamRepository) FindParamCacheByAddr(addr string) (*model.ParamCache, 
 	row := r.db.QueryRow(SQLSelectParamCacheByAddr, addr)
 
 	var cache model.ParamCache
-	err := row.Scan(&cache.ID, &cache.Addr, &cache.TraceID, &cache.BaseID, &cache.Data)
+	err := row.Scan(&cache.ID, &cache.Addr, &cache.BaseID, &cache.Data)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil // 没有找到缓存，返回 nil
@@ -94,26 +93,11 @@ func (r *ParamRepository) FindParamCacheByAddr(addr string) (*model.ParamCache, 
 	return &cache, nil
 }
 
-// DeleteParamCacheByTraceID 根据跟踪ID删除参数缓存
-func (r *ParamRepository) DeleteParamCacheByTraceID(traceId int64) error {
-	_, err := r.db.Exec(SQLDeleteParamCacheByTraceID, traceId)
+// DeleteParamCacheByAddr 根据地址删除参数缓存
+func (r *ParamRepository) DeleteParamCacheByAddr(addr string) error {
+	_, err := r.db.Exec(SQLDeleteParamCacheByAddr, addr)
 	if err != nil {
-		return fmt.Errorf("delete param cache by trace id error: %w", err)
-	}
-	return nil
-}
-
-// UpdateParamCache 更新参数缓存
-func (r *ParamRepository) UpdateParamCache(cache *model.ParamCache) error {
-	_, err := r.db.Exec(
-		SQLUpdateParamCache,
-		cache.TraceID,
-		cache.BaseID,
-		cache.Data,
-		cache.Addr,
-	)
-	if err != nil {
-		return fmt.Errorf("update param cache error: %w", err)
+		return fmt.Errorf("delete param cache by addr error: %w", err)
 	}
 	return nil
 }

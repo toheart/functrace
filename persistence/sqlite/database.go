@@ -77,7 +77,6 @@ func (s *SQLiteDatabase) createTablesAndIndexes() error {
 		SQLCreateParamTraceIndex,
 		SQLCreateParamBaseIndex,
 		SQLCreateParamCacheAddrIndex,
-		SQLCreateParamCacheTraceIndex,
 	}
 
 	for _, table := range tables {
