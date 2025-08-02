@@ -90,10 +90,6 @@ func (t *TraceInstance) prepareTraceInfo(id uint64) (indent int, parentId int64,
 
 // ExitTrace 记录函数调用的结束并减少跟踪缩进
 func (t *TraceInstance) ExitTrace(info *GoroutineInfo, traceData *model.TraceData, startTime time.Time) {
-	// 如果父函数ID为0，并且方法类型为指针接收者，则删除参数缓存
-	if traceData.ParentId == 0 && traceData.MethodType == MethodTypePointer {
-		t.DeleteParamFromCache(traceData.ID)
-	}
 	// 更新跟踪信息
 	indent := t.updateTraceIndent(info.ID)
 	if indent < 0 {

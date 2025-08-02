@@ -66,8 +66,8 @@ func (m *MockParamRepository) FindParamCacheByAddr(addr string) (*model.ParamCac
 	return args.Get(0).(*model.ParamCache), args.Error(1)
 }
 
-func (m *MockParamRepository) DeleteParamCacheByTraceID(traceId int64) error {
-	args := m.Called(traceId)
+func (m *MockParamRepository) DeleteParamCacheByAddr(addr string) error {
+	args := m.Called(addr)
 	return args.Error(0)
 }
 
@@ -315,11 +315,10 @@ func TestDealPointerMethodWithCache(t *testing.T) {
 	receiver.Value = "modified"
 	traceID2 := int64(456)
 	cachedParam := &model.ParamCache{
-		ID:      1,
-		Addr:    addr,
-		TraceID: traceID1,
-		BaseID:  1,
-		Data:    `{"Value":"receiver"}`,
+		ID:     1,
+		Addr:   addr,
+		BaseID: 1,
+		Data:   []byte(`{"Value":"receiver"}`),
 	}
 	mockParamRepo.On("FindParamCacheByAddr", addr).Return(cachedParam, nil).Once()
 
@@ -411,9 +410,9 @@ func TestStoreParams(t *testing.T) {
 
 	// 创建测试参数列表
 	paramList := []model.ParamStoreData{
-		{TraceID: 1, Position: 0, Data: "data1", IsReceiver: true, BaseID: 0},
-		{TraceID: 1, Position: 1, Data: "data2", IsReceiver: false, BaseID: 0},
-		{TraceID: 1, Position: 2, Data: "data3", IsReceiver: false, BaseID: 0},
+		{TraceID: 1, Position: 0, Data: []byte("data1"), IsReceiver: true, BaseID: 0},
+		{TraceID: 1, Position: 1, Data: []byte("data2"), IsReceiver: false, BaseID: 0},
+		{TraceID: 1, Position: 2, Data: []byte("data3"), IsReceiver: false, BaseID: 0},
 	}
 
 	for _, param := range paramList {
@@ -469,7 +468,7 @@ func TestStoreParamsWithError(t *testing.T) {
 
 	// 创建测试参数列表
 	paramList := []model.ParamStoreData{
-		{TraceID: 1, Position: 0, Data: "data1", IsReceiver: false, BaseID: 0},
+		{TraceID: 1, Position: 0, Data: []byte("data1"), IsReceiver: false, BaseID: 0},
 	}
 
 	// 执行被测试的函数
