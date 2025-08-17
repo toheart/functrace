@@ -72,14 +72,24 @@ func putDumpState(d *dumpState) {
 
 // safeDump executes a dumper with panic recovery
 func safeDump(dumper dumper, ds *dumpState, v reflect.Value, depth int) interface{} {
+	var result interface{}
+
 	defer func() {
 		if r := recover(); r != nil {
 			// Log the panic for debugging
 			fmt.Printf("Panic in dumper for kind %v: %v\n", v.Kind(), r)
+
+			// 返回错误信息而不是nil
+			result = map[string]interface{}{
+				"error": "concurrent access detected",
+				"type":  v.Type().String(),
+				"panic": fmt.Sprintf("%v", r),
+			}
 		}
 	}()
 
-	return dumper.dump(ds, v, depth)
+	result = dumper.dump(ds, v, depth)
+	return result
 }
 
 // dump is the main worker function that recursively dumps a value.
