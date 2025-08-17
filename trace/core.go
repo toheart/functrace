@@ -12,8 +12,11 @@ import (
 // enterTrace 记录函数调用的开始并存储必要的跟踪详情
 func (t *TraceInstance) EnterTrace(id uint64, name string, params []interface{}) (*model.TraceData, time.Time) {
 	startTime := time.Now() // 记录开始时间
-	// 获取跟踪信息和全局ID
-	indent, parentId, traceId := t.prepareTraceInfo(id)
+	// 通过会话独享状态准备进入信息
+	session := t.sessions.GetOrCreate(id)
+	// 确保会话转发器已启动
+	session.EnsureForwarder(t)
+	indent, parentId, traceId := session.PrepareEnter(t)
 	// 格式化时间序列，保留2位小数
 	duration := time.Since(currentNow)
 	seq := fmt.Sprintf("%.2f", float64(duration.Milliseconds())/1000.0)
@@ -53,7 +56,7 @@ func (t *TraceInstance) EnterTrace(id uint64, name string, params []interface{})
 		}
 	}
 	traceData.ParamsCount = originalParamsCount
-	t.sendOp(&DataOp{
+	session.Enqueue(&DataOp{
 		OpType: OpTypeInsert,
 		Arg:    traceData,
 	})
@@ -64,31 +67,9 @@ func (t *TraceInstance) EnterTrace(id uint64, name string, params []interface{})
 
 // prepareTraceInfo 准备跟踪信息并返回缩进级别、父ID和新的跟踪ID
 func (t *TraceInstance) prepareTraceInfo(id uint64) (indent int, parentId int64, traceId int64) {
-	t.Lock()
-	defer t.Unlock()
-
-	// 获取或初始化 TraceIndent
-	traceIndent, exists := t.indentations[id]
-	if !exists {
-		traceIndent = &TraceIndent{
-			Indent:      0,
-			ParentFuncs: make(map[int]int64),
-		}
-		t.indentations[id] = traceIndent
-	}
-
-	// 获取当前缩进和父函数ID
-	indent = traceIndent.Indent
-	parentId = traceIndent.ParentFuncs[indent-1] // 获取上一层的函数ID作为父函数
-
-	// 生成全局唯一ID
-	traceId = t.globalId.Add(1)
-
-	// 更新缩进和父函数ID
-	traceIndent.ParentFuncs[indent] = traceId // 使用生成的traceId作为当前函数ID
-	traceIndent.Indent++
-
-	return indent, parentId, traceId
+	// 为了兼容旧路径保留，但当前逻辑由 TraceSession 管理
+	session := t.sessions.GetOrCreate(id)
+	return session.PrepareEnter(t)
 }
 
 // ExitTrace 记录函数调用的结束并减少跟踪缩进
@@ -139,36 +120,19 @@ func (t *TraceInstance) ExitTrace(info *GoroutineInfo, traceData *model.TraceDat
 
 // updateTraceIndent 更新跟踪缩进并返回当前缩进级别
 func (t *TraceInstance) updateTraceIndent(id uint64) int {
-	t.Lock()
-	defer t.Unlock()
-
-	// 获取 TraceIndent
-	traceIndent, exists := t.indentations[id]
-	if !exists {
-		t.log.WithFields(logrus.Fields{"goroutine": id}).Error("can't find trace indent")
-		return -1
-	}
-
-	// 获取当前缩进
-	indent := traceIndent.Indent
-
-	// 删除当前层的父函数名称（使用正确的indent值）
-	delete(traceIndent.ParentFuncs, indent-1)
-
-	// 更新缩进
-	traceIndent.Indent--
-
-	// 如果缩进小于等于0，清除所有父函数名称
-	if traceIndent.Indent <= 0 {
-		traceIndent.ParentFuncs = make(map[int]int64)
-	}
-
-	return indent
+	// 会话内回退
+	session := t.sessions.GetOrCreate(id)
+	return session.OnExit()
 }
 
 // logFunctionEntry 记录函数进入的日志
 func (t *TraceInstance) logFunctionEntry(gid uint64, name string, indent int, parentId int64, paramCount int, startTime time.Time) {
-	indentStr := strings.Repeat("  ", indent)
+	// 防止负数导致 panic
+	indentCount := indent
+	if indentCount < 0 {
+		indentCount = 0
+	}
+	indentStr := strings.Repeat("  ", indentCount)
 	t.log.WithFields(logrus.Fields{
 		"goroutine": gid,
 		"name":      name,
@@ -181,11 +145,16 @@ func (t *TraceInstance) logFunctionEntry(gid uint64, name string, indent int, pa
 
 // logFunctionExit 记录函数退出的日志
 func (t *TraceInstance) logFunctionExit(gid uint64, name string, indent int, duration string) {
-	indentStr := strings.Repeat("  ", indent-1)
+	// 防止负数导致 panic：indent 是退出前的缩进层级，显示时需要减1
+	indentCount := indent - 1
+	if indentCount < 0 {
+		indentCount = 0
+	}
+	indentStr := strings.Repeat("  ", indentCount)
 	t.log.WithFields(logrus.Fields{
 		"goroutine": gid,
 		"name":      name,
-		"indent":    indent - 1,
+		"indent":    indentCount,
 		"duration":  duration,
 	}).Info(fmt.Sprintf("%s← %s (%s)", indentStr, name, duration))
 }

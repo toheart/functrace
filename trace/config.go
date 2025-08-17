@@ -274,6 +274,7 @@ func (c *Config) CreateSpewConfig() *objDump.ConfigState {
 		SkipNilValues:           false,
 		MaxElementsPerContainer: c.MaxElementsPerContainer,
 		AllowUnexported:         c.AllowUnexportedParams,
+		CompactLargeObjects:     true,
 	}
 }
 

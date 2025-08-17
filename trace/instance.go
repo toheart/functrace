@@ -68,6 +68,12 @@ type TraceInstance struct {
 	memoryMonitor *MemoryMonitor
 	// TTL缓存管理器
 	ttlManager *TTLCacheManager
+
+	// 分片ID生成器
+	idGen IDGenerator
+
+	// 会话注册表
+	sessions *SessionRegistry
 }
 
 // NewTraceInstance 初始化并返回 TraceInstance 的单例实例
@@ -133,6 +139,10 @@ func initTraceInstance() {
 		dataClose:        make(chan struct{}),
 		config:           config,
 	}
+	// 初始化分片ID生成器（默认64分片）
+	instance.idGen = NewStripedIDGenerator(64)
+	// 初始化会话注册表
+	instance.sessions = NewSessionRegistry()
 	// 初始化TTL缓存管理器
 	instance.ttlManager = NewTTLCacheManager(instance.log)
 	// 初始化内存监控器
@@ -215,9 +225,11 @@ func initializeLogger() *logrus.Logger {
 
 	// 配置日志输出到lumberjack用于日志轮转
 	logWriter := &lumberjack.Logger{
-		Filename:  LogFileName,
-		LocalTime: true,
-		Compress:  true,
+		Filename:   LogFileName,
+		MaxSize:    20, // 单位为MB，20M
+		MaxBackups: 3,
+		LocalTime:  true,
+		Compress:   true,
 	}
 	log.SetOutput(logWriter)
 

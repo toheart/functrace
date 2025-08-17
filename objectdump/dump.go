@@ -104,6 +104,7 @@ func (d *dumpState) dumpWithDepth(v reflect.Value, depth int) interface{} {
 	}
 
 	// Depth truncation.
+	// depth 表示“业务结构深度”：指针/接口解引用不会增加 depth，以免过早触发 MaxDepth。
 	if d.cs.MaxDepth > 0 && depth > d.cs.MaxDepth && isDeepType(v.Kind()) {
 		var l, c int
 		switch v.Kind() {

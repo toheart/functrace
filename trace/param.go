@@ -14,6 +14,21 @@ import (
 	objDump "github.com/toheart/functrace/objectdump"
 )
 
+// nextParamID 使用分片ID生成器生成全局唯一的参数ID
+func (t *TraceInstance) nextParamID(shardKey uint64) int64 {
+	if t.idGen != nil {
+		return t.idGen.NextParamID(shardKey)
+	}
+	// 回退到全局原子，确保向后兼容
+	return t.gParamId.Add(1)
+}
+
+// idHint 为参数ID分片选择提供一个简单的键
+func idHint(params []interface{}, index int) uint64 {
+	// 以参数位置作为简易分片键，避免所有参数都打到同一分片
+	return uint64(index + 1)
+}
+
 var (
 	magicNumber = []byte{'F', 'T', 'Z', '$'} // Fun-Trace-Zstd Magic Number
 )
@@ -62,7 +77,7 @@ func decompress(data []byte) string {
 func (t *TraceInstance) DealNormalMethod(traceID int64, params []interface{}) {
 	for i, item := range params {
 		paramStoreData := &model.ParamStoreData{
-			ID:       t.gParamId.Add(1),
+			ID:       t.nextParamID(idHint(params, i)),
 			TraceID:  traceID,
 			Position: i,
 			Data:     compress(objDump.Sdump(item)),
@@ -78,7 +93,7 @@ func (t *TraceInstance) DealNormalMethod(traceID int64, params []interface{}) {
 func (t *TraceInstance) DealValueMethod(traceID int64, params []interface{}) {
 	for i, item := range params {
 		paramStoreData := &model.ParamStoreData{
-			ID:       t.gParamId.Add(1),
+			ID:       t.nextParamID(idHint(params, i)),
 			TraceID:  traceID,
 			Position: i,
 			Data:     compress(objDump.Sdump(item)),
@@ -184,7 +199,7 @@ func (t *TraceInstance) DealPointerMethod(traceID int64, params []interface{}) {
 	receiverDataStr := objDump.Sdump(receiver)
 
 	paramStoreData := &model.ParamStoreData{
-		ID:         t.gParamId.Add(1),
+		ID:         t.nextParamID(0),
 		TraceID:    traceID,
 		Position:   0,
 		IsReceiver: true,
@@ -244,7 +259,7 @@ func (t *TraceInstance) DealPointerMethod(traceID int64, params []interface{}) {
 	// 处理其他参数 (这部分不需要在锁内)
 	for i := 1; i < len(params); i++ {
 		otherParamData := &model.ParamStoreData{
-			ID:       t.gParamId.Add(1),
+			ID:       t.nextParamID(0),
 			TraceID:  traceID,
 			Position: i,
 			Data:     compress(objDump.Sdump(params[i])),

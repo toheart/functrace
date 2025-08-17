@@ -92,6 +92,13 @@ func (t *TraceInstance) finishGoroutineTrace(info *GoroutineInfo) {
 
 	// 从映射中移除
 	t.deleteGoroutineRunning(info.OriginGID)
+	// 同时移除会话
+	if t.sessions != nil {
+		// 优雅关闭会话，确保数据转发完成
+		s := t.sessions.GetOrCreate(info.OriginGID)
+		s.Close()
+		t.sessions.Remove(info.OriginGID)
+	}
 	t.log.WithFields(logrus.Fields{
 		"goroutine identifier": info.OriginGID,
 		"database id":          info.ID,

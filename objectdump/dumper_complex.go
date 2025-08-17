@@ -29,7 +29,8 @@ func (d *ptrDumper) dump(ds *dumpState, v reflect.Value, depth int) interface{} 
 	if v.IsNil() {
 		return nil
 	}
-	return ds.dumpWithDepth(v.Elem(), depth+1)
+	// 解引用指针不计入逻辑深度，避免多层 *T 过早触发 MaxDepth
+	return ds.dumpWithDepth(v.Elem(), depth)
 }
 
 type structDumper struct{}
@@ -199,5 +200,6 @@ func (d *interfaceDumper) dump(ds *dumpState, v reflect.Value, depth int) interf
 	if v.IsNil() {
 		return nil
 	}
-	return ds.dumpWithDepth(v.Elem(), depth+1)
+	// 接口拆箱不增加深度，保证业务结构的层级更直观
+	return ds.dumpWithDepth(v.Elem(), depth)
 }
