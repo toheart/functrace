@@ -32,11 +32,8 @@ func Trace(params []interface{}) func() {
 		return func() {}
 	}
 
-	// 修改id值
-	info, _ := instance.InitGoroutineIfNeeded(gid, name)
-
-	// 确保 TraceIndent 已初始化
-	instance.InitTraceIndentIfNeeded(info.ID)
+	// 原子化地初始化goroutine和trace缩进，避免并发安全问题
+	info, _ := instance.InitGoroutineAndTraceAtomic(gid, name)
 
 	// 记录函数进入
 	traceData, startTime := instance.EnterTrace(info.ID, name, params)

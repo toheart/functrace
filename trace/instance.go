@@ -240,6 +240,102 @@ func (t *TraceInstance) InitTraceIndentIfNeeded(id uint64) {
 	}
 }
 
+// InitGoroutineAndTraceAtomic 原子化地初始化goroutine和trace缩进
+// 这个方法将goroutine初始化和trace缩进初始化合并为一个原子操作，避免并发安全问题
+func (t *TraceInstance) InitGoroutineAndTraceAtomic(gid uint64, name string) (info *GoroutineInfo, initFunc bool) {
+	// 首先尝试只读操作
+	t.RLock()
+	info, exists := t.GoroutineRunning[gid]
+	if exists {
+		// 同时检查对应的trace缩进是否存在
+		_, traceExists := t.indentations[info.ID]
+		t.RUnlock()
+
+		if traceExists {
+			return info, false
+		}
+
+		// 如果goroutine存在但trace缩进不存在，需要创建缩进
+		t.Lock()
+		defer t.Unlock()
+
+		// 二次检查goroutine是否仍然存在
+		info, exists = t.GoroutineRunning[gid]
+		if !exists {
+			// goroutine在期间被清理了，重新创建
+			return t.createNewGoroutineAndTrace(gid, name)
+		}
+
+		// 创建缺失的trace缩进
+		if _, traceExists := t.indentations[info.ID]; !traceExists {
+			t.indentations[info.ID] = &TraceIndent{
+				Indent:      0,
+				ParentFuncs: make(map[int]int64),
+			}
+		}
+
+		return info, false
+	}
+	t.RUnlock()
+
+	// goroutine不存在，需要创建
+	t.Lock()
+	defer t.Unlock()
+
+	// 二次检查
+	info, exists = t.GoroutineRunning[gid]
+	if exists {
+		// 确保对应的trace缩进也存在
+		if _, traceExists := t.indentations[info.ID]; !traceExists {
+			t.indentations[info.ID] = &TraceIndent{
+				Indent:      0,
+				ParentFuncs: make(map[int]int64),
+			}
+		}
+		return info, false
+	}
+
+	// 创建新的goroutine和trace缩进
+	return t.createNewGoroutineAndTrace(gid, name)
+}
+
+// createNewGoroutineAndTrace 创建新的goroutine信息和对应的trace缩进
+// 注意：调用此方法时必须已经持有写锁
+func (t *TraceInstance) createNewGoroutineAndTrace(gid uint64, name string) (info *GoroutineInfo, initFunc bool) {
+	start := time.Now()
+	id := t.gGroutineId.Add(1)
+
+	// 创建goroutine信息
+	info = &GoroutineInfo{
+		ID:             id,
+		OriginGID:      gid,
+		LastUpdateTime: start.Format(TimeFormat),
+	}
+
+	// 原子化地创建goroutine和trace缩进
+	t.GoroutineRunning[gid] = info
+	t.indentations[id] = &TraceIndent{
+		Indent:      0,
+		ParentFuncs: make(map[int]int64),
+	}
+
+	// 发送数据库操作
+	t.sendOp(&DataOp{
+		OpType: OpTypeInsert,
+		Arg: &model.GoroutineTrace{
+			ID:           int64(id),
+			OriginGID:    gid,
+			CreateTime:   start.Format(TimeFormat),
+			IsFinished:   0,
+			InitFuncName: name,
+		},
+	})
+
+	t.log.WithFields(logrus.Fields{"goroutine": id, "initFunc": name}).Info("initialized goroutine trace atomically")
+
+	return info, true
+}
+
 // getAllGoroutineIDs 获取当前所有运行中的协程ID
 func (t *TraceInstance) getAllGoroutineIDs() []int {
 	buf := make([]byte, 1<<20) // 分配 1MB 缓冲区

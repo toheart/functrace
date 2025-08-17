@@ -12,7 +12,6 @@ import (
 // enterTrace 记录函数调用的开始并存储必要的跟踪详情
 func (t *TraceInstance) EnterTrace(id uint64, name string, params []interface{}) (*model.TraceData, time.Time) {
 	startTime := time.Now() // 记录开始时间
-
 	// 获取跟踪信息和全局ID
 	indent, parentId, traceId := t.prepareTraceInfo(id)
 	// 格式化时间序列，保留2位小数
