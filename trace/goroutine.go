@@ -59,22 +59,9 @@ func (t *TraceInstance) SetGoroutineRunning(info *GoroutineInfo) {
 }
 
 // GoroutineFinished 标记协程已完成
+// Deprecated: 请使用 finishGoroutineTrace 方法替代
 func (t *TraceInstance) GoroutineFinished(info *GoroutineInfo) {
-	// 使用持久化层更新协程状态
-	go func() {
-		err := repositoryFactory.GetGoroutineRepository().UpdateGoroutineTimeCost(int64(info.ID), "unknown", 1)
-		if err != nil {
-			t.log.WithFields(logrus.Fields{
-				"error": err,
-				"id":    info.ID,
-			}).Error("更新协程状态失败")
-		}
-	}()
-
-	// 从运行映射中移除
-	t.Lock()
-	delete(t.GoroutineRunning, info.OriginGID)
-	t.Unlock()
+	t.finishGoroutineTrace(info)
 }
 
 // finishGoroutineTrace 完成对goroutine的跟踪
@@ -85,8 +72,6 @@ func (t *TraceInstance) finishGoroutineTrace(info *GoroutineInfo) {
 	goroutine, err := repositoryFactory.GetGoroutineRepository().FindGoroutineByID(int64(info.ID))
 	if err != nil {
 		t.log.WithFields(logrus.Fields{"error": err}).Error("get goroutine info failed")
-		// 在失败的情况下，使用默认的时间成本
-		t.sendFinishedGoroutineOp(goroutine, time.Since(currentNow).String())
 		return
 	}
 
@@ -215,26 +200,9 @@ func (t *TraceInstance) SetGoroutineStarted(gid uint64, originGid uint64, funcNa
 }
 
 // SetGoroutineFinished 设置协程已完成
+// Deprecated: 请使用 finishGoroutineTrace 方法替代
 func (t *TraceInstance) SetGoroutineFinished(gid uint64, info *GoroutineInfo) {
-	// 计算协程执行时间
-	timeCost := "unknown"
-
-	// 使用持久化层更新协程数据
-	go func() {
-		err := repositoryFactory.GetGoroutineRepository().UpdateGoroutineTimeCost(int64(info.ID), timeCost, 1) // 将 uint64 转换为 int64
-		if err != nil {
-			t.log.WithFields(logrus.Fields{
-				"error":    err,
-				"id":       info.ID,
-				"timeCost": timeCost,
-			}).Error("更新协程执行时间失败")
-		}
-	}()
-
-	// 从运行映射中移除
-	t.Lock()
-	delete(t.GoroutineRunning, gid)
-	t.Unlock()
+	t.finishGoroutineTrace(info)
 }
 
 func (t *TraceInstance) saveGoroutineTrace(goroutine *model.GoroutineTrace) {
@@ -266,8 +234,8 @@ func (t *TraceInstance) updateGoroutineTimeCost(goroutine *model.GoroutineTrace)
 func (t *TraceInstance) sendFinishedGoroutineOp(goroutine *model.GoroutineTrace, timeCost string) {
 	goroutine.TimeCost = timeCost
 	goroutine.IsFinished = 1
-	t.OpChan <- &DataOp{
+	t.sendOp(&DataOp{
 		OpType: OpTypeUpdate,
 		Arg:    goroutine,
-	}
+	})
 }

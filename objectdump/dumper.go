@@ -51,7 +51,7 @@ func init() {
 
 // getDumper retrieves the appropriate dumper for a given reflect.Kind
 func getDumper(kind reflect.Kind) dumper {
-	if dumper, exists := dumperRegistry[kind]; exists {
+	if dumper, exists := dumperRegistry[kind]; exists && dumper != nil {
 		return dumper
 	}
 	return &unsupportedDumper{}

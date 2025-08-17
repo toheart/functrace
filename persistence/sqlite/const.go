@@ -46,21 +46,21 @@ const (
 		data BLOB
 	)`
 
-	SQLCreateGIDIndex             = "CREATE INDEX IF NOT EXISTS idx_gid ON TraceData (gid)"
-	SQLCreateParentIndex          = "CREATE INDEX IF NOT EXISTS idx_parent ON TraceData (parentId)"
-	SQLCreateParamTraceIndex      = "CREATE INDEX IF NOT EXISTS idx_param_trace ON ParamStore (traceId)"
-	SQLCreateParamBaseIndex       = "CREATE INDEX IF NOT EXISTS idx_param_base ON ParamStore (baseId)"
-	SQLCreateParamCacheAddrIndex  = "CREATE INDEX IF NOT EXISTS idx_param_cache_addr ON ParamCache (addr)"
+	SQLCreateGIDIndex            = "CREATE INDEX IF NOT EXISTS idx_gid ON TraceData (gid)"
+	SQLCreateParentIndex         = "CREATE INDEX IF NOT EXISTS idx_parent ON TraceData (parentId)"
+	SQLCreateParamTraceIndex     = "CREATE INDEX IF NOT EXISTS idx_param_trace ON ParamStore (traceId)"
+	SQLCreateParamBaseIndex      = "CREATE INDEX IF NOT EXISTS idx_param_base ON ParamStore (baseId)"
+	SQLCreateParamCacheAddrIndex = "CREATE INDEX IF NOT EXISTS idx_param_cache_addr ON ParamCache (addr)"
 
 	SQLInsertTrace    = "INSERT INTO TraceData (id, name, gid, indent, paramsCount, parentId, createdAt, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 	SQLUpdateTimeCost = "UPDATE TraceData SET timeCost = ?, isFinished = ? WHERE id = ?"
 
 	// 参数表操作语句
-	SQLInsertParam = "INSERT INTO ParamStore (traceId, position, data, isReceiver, baseId) VALUES (?, ?, ?, ?, ?)"
+	SQLInsertParam = "INSERT INTO ParamStore (id, traceId, position, data, isReceiver, baseId) VALUES (?, ?, ?, ?, ?, ?)"
 
 	// 参数缓存表操作语句
 	SQLInsertParamCache       = "INSERT OR REPLACE INTO ParamCache (addr, baseId, data) VALUES (?, ?, ?)"
-	SQLSelectParamCacheByAddr = "SELECT id, addr, baseId, data FROM ParamCache WHERE addr = ?"
+	SQLSelectParamCacheByAddr = "SELECT id, addr, baseId, data FROM ParamCache WHERE addr = ? limit 1"
 	SQLDeleteParamCacheByAddr = "DELETE FROM ParamCache WHERE addr = ?"
 
 	// Goroutine表操作语句

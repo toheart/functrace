@@ -8,7 +8,7 @@ import (
 
 func TestIsStructMethod(t *testing.T) {
 	// 创建测试实例
-	traceInstance := setupTestTraceInstance()
+	traceInstance := NewTraceInstance()
 
 	// 定义测试用例
 	testCases := []struct {

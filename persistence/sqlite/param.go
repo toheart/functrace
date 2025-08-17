@@ -24,6 +24,7 @@ func NewParamRepository(db *sql.DB) domain.ParamRepository {
 func (r *ParamRepository) SaveParam(param *model.ParamStoreData) (int64, error) {
 	result, err := r.db.Exec(
 		SQLInsertParam,
+		param.ID,
 		param.TraceID,
 		param.Position,
 		param.Data,

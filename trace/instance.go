@@ -23,6 +23,7 @@ var (
 	instance    *TraceInstance
 	currentNow  time.Time
 	stopMonitor chan struct{} // 停止监控的信号通道
+	stopOnce    sync.Once     // 确保stopMonitor只关闭一次
 )
 
 // 存储仓储工厂的全局实例
@@ -99,7 +100,8 @@ func NewTraceInstance() *TraceInstance {
 			instance.log.WithFields(logrus.Fields{
 				"memory_limit":   humanReadableBytes(instance.config.MemoryLimit),
 				"check_interval": instance.config.MemoryCheckInterval,
-			}).Info("memory monitor started for 'all' parameter store mode")
+				"param_mode":     instance.config.ParamStoreMode,
+			}).Info("memory monitor started for parameter store mode")
 		}
 
 		// 如果是异步模式，启动OpChan处理
@@ -131,10 +133,8 @@ func initTraceInstance() {
 		dataClose:        make(chan struct{}),
 		config:           config,
 	}
-
 	// 初始化TTL缓存管理器
 	instance.ttlManager = NewTTLCacheManager(instance.log)
-
 	// 初始化内存监控器
 	instance.memoryMonitor = NewMemoryMonitor(
 		config.MemoryLimit,
@@ -274,14 +274,14 @@ func (t *TraceInstance) Close() error {
 	// 标记为已关闭
 	t.closed = true
 
-	// 发送停止监控信号
-	close(stopMonitor)
-
+	// 发送停止监控信号（确保只关闭一次）
+	stopOnce.Do(func() {
+		close(stopMonitor)
+	})
 	// 停止TTL缓存管理器
 	if t.config.ParamStoreMode == ParamStoreModeAll {
 		t.ttlManager.Stop()
 	}
-
 	// 停止内存监控器
 	if t.memoryMonitor != nil && t.memoryMonitor.IsEnabled() {
 		t.memoryMonitor.Stop()
@@ -363,7 +363,24 @@ func (t *TraceInstance) sendOp(op *DataOp) {
 	if t.config.InsertMode == SyncMode {
 		t.executeOp(op)
 	} else {
-		t.OpChan <- op
+		// 检查是否已关闭，避免向已关闭的通道写入
+		t.RLock()
+		if t.closed {
+			t.RUnlock()
+			// 已关闭，改为同步执行以确保数据不丢失
+			t.executeOp(op)
+			return
+		}
+
+		// 使用select避免阻塞，如果通道满了则同步执行
+		select {
+		case t.OpChan <- op:
+			t.RUnlock()
+		default:
+			t.RUnlock()
+			// 通道满了，同步执行避免丢失数据
+			t.executeOp(op)
+		}
 	}
 }
 

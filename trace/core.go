@@ -33,6 +33,9 @@ func (t *TraceInstance) EnterTrace(id uint64, name string, params []interface{})
 	funcInfo := t.isStructMethod(name)
 	traceData.MethodType = funcInfo.Type
 
+	// 记录原始参数数量，避免在处理过程中被修改
+	originalParamsCount := len(params)
+
 	if t.config.ParamStoreMode != ParamStoreModeNone {
 		switch funcInfo.Type {
 		case MethodTypeNormal:
@@ -42,14 +45,15 @@ func (t *TraceInstance) EnterTrace(id uint64, name string, params []interface{})
 		case MethodTypePointer:
 			if t.config.ParamStoreMode == ParamStoreModeNormal {
 				// 普通模式下，跳过第一个参数（接收者）
-				params = params[1:]
-				t.DealNormalMethod(traceId, params)
+				if len(params) > 0 {
+					t.DealNormalMethod(traceId, params[1:])
+				}
 			} else {
 				t.DealPointerMethod(traceId, params)
 			}
 		}
 	}
-	traceData.ParamsCount = len(params)
+	traceData.ParamsCount = originalParamsCount
 	t.sendOp(&DataOp{
 		OpType: OpTypeInsert,
 		Arg:    traceData,
@@ -90,15 +94,22 @@ func (t *TraceInstance) prepareTraceInfo(id uint64) (indent int, parentId int64,
 
 // ExitTrace 记录函数调用的结束并减少跟踪缩进
 func (t *TraceInstance) ExitTrace(info *GoroutineInfo, traceData *model.TraceData, startTime time.Time) {
-	// 更新跟踪信息
-	indent := t.updateTraceIndent(info.ID)
-	if indent < 0 {
-		return // 处理错误情况
-	}
-
-	// 计算函数执行时间
+	// 计算函数执行时间（无论是否出错都要记录）
 	duration := time.Since(startTime)
 
+	// 更新跟踪信息
+	indent := t.updateTraceIndent(info.ID)
+	logIndent := indent
+	if indent < 0 {
+		// 如果更新缩进失败，使用默认值继续处理，确保数据完整性
+		t.log.WithFields(logrus.Fields{
+			"goroutine": info.ID,
+			"function":  traceData.Name,
+		}).Warn("failed to update trace indent, using default value")
+		logIndent = 0
+	}
+
+	// 更新函数执行时间和完成状态
 	t.sendOp(&DataOp{
 		OpType: OpTypeUpdate,
 		Arg: &model.TraceData{
@@ -109,13 +120,13 @@ func (t *TraceInstance) ExitTrace(info *GoroutineInfo, traceData *model.TraceDat
 	})
 
 	// 记录日志
-	t.logFunctionExit(info.ID, traceData.Name, indent, duration.String())
+	t.logFunctionExit(info.ID, traceData.Name, logIndent, duration.String())
 
 	// 检查是否是main.main函数退出，如果是则等待所有数据入库完成
 	if t.isMainFunction(traceData.Name) {
 		t.log.WithFields(logrus.Fields{
 			"function": traceData.Name,
-			"indent":   indent,
+			"indent":   logIndent,
 		}).Info("main.main function exiting, ensuring all data is persisted before exit")
 
 		// 直接关闭trace实例，这会自动等待所有数据入库完成
@@ -142,7 +153,7 @@ func (t *TraceInstance) updateTraceIndent(id uint64) int {
 	// 获取当前缩进
 	indent := traceIndent.Indent
 
-	// 删除当前层的父函数名称
+	// 删除当前层的父函数名称（使用正确的indent值）
 	delete(traceIndent.ParentFuncs, indent-1)
 
 	// 更新缩进

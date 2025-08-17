@@ -70,6 +70,18 @@ func putDumpState(d *dumpState) {
 	dumpStatePool.Put(d)
 }
 
+// safeDump executes a dumper with panic recovery
+func safeDump(dumper dumper, ds *dumpState, v reflect.Value, depth int) interface{} {
+	defer func() {
+		if r := recover(); r != nil {
+			// Log the panic for debugging
+			fmt.Printf("Panic in dumper for kind %v: %v\n", v.Kind(), r)
+		}
+	}()
+
+	return dumper.dump(ds, v, depth)
+}
+
 // dump is the main worker function that recursively dumps a value.
 func (d *dumpState) dump(v reflect.Value) interface{} {
 	return d.dumpWithDepth(v, -1)
@@ -107,7 +119,12 @@ func (d *dumpState) dumpWithDepth(v reflect.Value, depth int) interface{} {
 
 	// Get the appropriate dumper strategy and execute it
 	dumper := getDumper(v.Kind())
-	return dumper.dump(d, v, depth)
+	if dumper == nil {
+		return fmt.Sprintf("<nil dumper for kind: %v>", v.Kind())
+	}
+
+	// Execute dumper with panic recovery
+	return safeDump(dumper, d, v, depth)
 }
 
 // Sdump returns a string with the passed arguments formatted as a JSON object.

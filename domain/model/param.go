@@ -12,11 +12,10 @@ type ParamStoreData struct {
 
 // ParamCache 存储参数缓存信息的结构体
 type ParamCache struct {
-	ID             int64     `json:"id"`     // 唯一标识符
-	Addr           string    `json:"addr"`   // 对象地址
-	BaseID         int64     `json:"baseId"` // 基础参数ID
-	Data           []byte    `json:"data"`   // JSON格式的参数数据
-	LastAccessedAt int64 `json:"lastAccessedAt"` // 最后访问时间
+	ID     int64  `json:"id"`     // 唯一标识符
+	Addr   string `json:"addr"`   // 对象地址
+	BaseID int64  `json:"baseId"` // 基础参数ID
+	Data   []byte `json:"data"`   // JSON格式的参数数据
 }
 
 // ReceiverInfo 接收者信息

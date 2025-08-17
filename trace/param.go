@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"runtime"
+	"strings"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/klauspost/compress/zstd"
@@ -15,19 +15,26 @@ import (
 )
 
 var (
-	zstdEncoder, _ = zstd.NewWriter(nil)
-	zstdDecoder, _ = zstd.NewReader(nil)
-	magicNumber    = []byte{'F', 'T', 'Z', '$'} // Fun-Trace-Zstd Magic Number
+	magicNumber = []byte{'F', 'T', 'Z', '$'} // Fun-Trace-Zstd Magic Number
 )
 
 // compress uses zstd to compress a string and returns the compressed data prefixed with a magic number.
+// 为了线程安全，每次调用都创建新的编码器
 func compress(s string) []byte {
-	compressed := zstdEncoder.EncodeAll([]byte(s), nil)
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		// 如果创建编码器失败，返回未压缩数据
+		return append(magicNumber, []byte(s)...)
+	}
+	defer encoder.Close()
+
+	compressed := encoder.EncodeAll([]byte(s), nil)
 	return append(magicNumber, compressed...)
 }
 
 // decompress uses zstd to decompress data. It checks for a magic number to identify
 // compressed data and includes a fallback for uncompressed or corrupted data.
+// 为了线程安全，每次调用都创建新的解码器
 func decompress(data []byte) string {
 	if len(data) < len(magicNumber) || !bytes.Equal(data[:len(magicNumber)], magicNumber) {
 		// Data doesn't have the magic number, so it's legacy uncompressed data.
@@ -35,7 +42,14 @@ func decompress(data []byte) string {
 	}
 
 	// Data has the magic number, so it should be decompressed.
-	decompressed, err := zstdDecoder.DecodeAll(data[len(magicNumber):], nil)
+	decoder, err := zstd.NewReader(nil)
+	if err != nil {
+		// 如果创建解码器失败，返回原始数据
+		return string(data)
+	}
+	defer decoder.Close()
+
+	decompressed, err := decoder.DecodeAll(data[len(magicNumber):], nil)
 	if err != nil {
 		// Data is corrupted. The calling function will fail to unmarshal it,
 		// which will be logged as a high-level error.
@@ -46,42 +60,38 @@ func decompress(data []byte) string {
 
 // DealNormalMethod 处理普通方法的参数
 func (t *TraceInstance) DealNormalMethod(traceID int64, params []interface{}) {
-	t.safeExecute(func() {
-		for i, item := range params {
-			paramStoreData := &model.ParamStoreData{
-				ID:       t.gParamId.Add(1),
-				TraceID:  traceID,
-				Position: i,
-				Data:     compress(objDump.Sdump(item)),
-			}
-			t.sendOp(&DataOp{
-				OpType: OpTypeInsert,
-				Arg:    paramStoreData,
-			})
+	for i, item := range params {
+		paramStoreData := &model.ParamStoreData{
+			ID:       t.gParamId.Add(1),
+			TraceID:  traceID,
+			Position: i,
+			Data:     compress(objDump.Sdump(item)),
 		}
-	})
+		t.sendOp(&DataOp{
+			OpType: OpTypeInsert,
+			Arg:    paramStoreData,
+		})
+	}
 }
 
 // DealValueMethod 处理值方法的参数
 func (t *TraceInstance) DealValueMethod(traceID int64, params []interface{}) {
-	t.safeExecute(func() {
-		for i, item := range params {
-			paramStoreData := &model.ParamStoreData{
-				ID:       t.gParamId.Add(1),
-				TraceID:  traceID,
-				Position: i,
-				Data:     compress(objDump.Sdump(item)),
-			}
-			t.sendOp(&DataOp{
-				OpType: OpTypeInsert,
-				Arg:    paramStoreData,
-			})
+	for i, item := range params {
+		paramStoreData := &model.ParamStoreData{
+			ID:       t.gParamId.Add(1),
+			TraceID:  traceID,
+			Position: i,
+			Data:     compress(objDump.Sdump(item)),
 		}
-	})
+		t.sendOp(&DataOp{
+			OpType: OpTypeInsert,
+			Arg:    paramStoreData,
+		})
+	}
 }
 
 func (t *TraceInstance) GetAddrKey(receiver interface{}) string {
-	// Ensure the receiver is a pointer, as only pointers can have finalizers.
+	// 确保接收者是指针类型，以便获取其地址
 	val := reflect.ValueOf(receiver)
 	if val.Kind() != reflect.Ptr {
 		return ""
@@ -89,122 +99,161 @@ func (t *TraceInstance) GetAddrKey(receiver interface{}) string {
 	return fmt.Sprintf("%d", val.Pointer())
 }
 
+// getStableObjectKey 生成稳定的对象键：包名.类型名@指针地址
+func (t *TraceInstance) getStableObjectKey(receiver interface{}) string {
+	val := reflect.ValueOf(receiver)
+	if val.Kind() != reflect.Ptr {
+		return ""
+	}
+
+	// 检查是否为nil指针
+	if val.IsNil() {
+		return ""
+	}
+
+	// 获取类型信息（包含包名）
+	elemType := val.Elem().Type()
+	pkgPath := elemType.PkgPath()
+	typeName := elemType.Name()
+
+	// 处理匿名类型或内置类型
+	if pkgPath == "" {
+		pkgPath = "builtin"
+	}
+	if typeName == "" {
+		// 对于匿名类型，使用简化的类型描述
+		typeName = t.simplifyTypeName(elemType)
+	}
+
+	// 组合：包名.类型名@指针地址
+	addr := val.Pointer()
+	return fmt.Sprintf("%s.%s@%d", pkgPath, typeName, addr)
+}
+
+// simplifyTypeName 简化类型名称，避免过长的键和特殊字符
+func (t *TraceInstance) simplifyTypeName(elemType reflect.Type) string {
+	typeStr := elemType.String()
+
+	// 处理各种特殊情况
+	switch elemType.Kind() {
+	case reflect.Struct:
+		// 匿名结构体使用简化名称
+		if elemType.Name() == "" {
+			return "anonymous_struct"
+		}
+		return elemType.Name()
+	case reflect.Slice:
+		return "slice"
+	case reflect.Map:
+		return "map"
+	case reflect.Array:
+		return "array"
+	case reflect.Chan:
+		return "chan"
+	case reflect.Func:
+		return "func"
+	case reflect.Interface:
+		return "interface"
+	default:
+		// 移除特殊字符，避免数据库查询问题
+		// 替换 []{}()<> 等字符为下划线
+		simplified := typeStr
+		specialChars := []string{"[", "]", "{", "}", "(", ")", "<", ">", " ", ";"}
+		for _, char := range specialChars {
+			simplified = strings.ReplaceAll(simplified, char, "_")
+		}
+		// 限制长度
+		return simplified
+	}
+}
+
 // DealPointerMethod 处理指针方法的参数
 func (t *TraceInstance) DealPointerMethod(traceID int64, params []interface{}) {
-	t.safeExecute(func() {
-		if len(params) == 0 {
-			return
-		}
-		// 获取第一个参数的地址（接收者）
-		receiver := params[0]
-		addr := t.GetAddrKey(receiver)
-		if addr == "" {
-			// Not a pointer, cannot be cached. Treat as a normal method.
-			t.DealNormalMethod(traceID, params)
-			return
-		}
+	if len(params) == 0 {
+		return
+	}
+	// 获取第一个参数（接收者）
+	receiver := params[0]
+	stableKey := t.getStableObjectKey(receiver)
+	if stableKey == "" {
+		// 不是指针类型，回退到普通方法处理
+		t.DealNormalMethod(traceID, params)
+		return
+	}
 
-		receiverDataStr := objDump.Sdump(receiver)
+	receiverDataStr := objDump.Sdump(receiver)
 
-		paramStoreData := &model.ParamStoreData{
-			ID:         t.gParamId.Add(1),
-			TraceID:    traceID,
-			Position:   0,
-			IsReceiver: true,
-		}
+	paramStoreData := &model.ParamStoreData{
+		ID:         t.gParamId.Add(1),
+		TraceID:    traceID,
+		Position:   0,
+		IsReceiver: true,
+	}
 
-		// Lock the entire read-modify-write operation for the cache
-		t.paramCacheLock.Lock()
-		defer t.paramCacheLock.Unlock()
+	// 先在锁外进行数据库查询，避免长时间持有锁
+	cache, err := repositoryFactory.GetParamRepository().FindParamCacheByAddr(stableKey)
 
-		// 检查缓存中是否存在该接收者
-		cache, err := repositoryFactory.GetParamRepository().FindParamCacheByAddr(addr)
-		if err != nil {
-			t.log.WithFields(logrus.Fields{"error": err, "addr": addr}).Error("failed to get param from database cache")
+	// 在锁内处理缓存逻辑，进行快速的内存操作
+	t.paramCacheLock.Lock()
+	needCreateCache := false
+
+	if err != nil {
+		// 数据库查询失败，记录错误并存储完整数据
+		t.log.WithFields(logrus.Fields{"error": err, "stableKey": stableKey}).Error("failed to get param from database cache")
+		paramStoreData.Data = compress(receiverDataStr)
+	} else if cache != nil {
+		// 缓存存在，计算差异
+		originalDataStr := decompress(cache.Data)
+		if diff, err := createJSONPatch(originalDataStr, receiverDataStr); err != nil {
+			// diff计算失败，存储完整数据（实用主义：不影响主流程）
+			t.log.WithFields(logrus.Fields{"error": err, "stableKey": stableKey}).Warn("failed to create json patch, storing full data")
 			paramStoreData.Data = compress(receiverDataStr)
-		} else if cache != nil {
-			// 存在则解压旧数据并计算差异
-			originalDataStr := decompress(cache.Data)
-			if diff, err := createJSONPatch(originalDataStr, receiverDataStr); err != nil {
-				t.log.WithFields(logrus.Fields{"error": err}).Error("failed to create json patch, storing full data")
-				paramStoreData.Data = compress(receiverDataStr)
-			} else {
-				paramStoreData.Data = compress(diff)
-				paramStoreData.BaseID = cache.BaseID
-			}
-			// 只要访问，就更新TTL
-			t.ttlManager.Update(addr)
 		} else {
-			// 不存在则存储完整数据
-			compressedData := compress(receiverDataStr)
-			paramStoreData.Data = compressedData
-
-			newCache := &model.ParamCache{
-				Addr:   addr,
-				BaseID: paramStoreData.ID,
-				Data:   compressedData,
-			}
-			if _, err := repositoryFactory.GetParamRepository().SaveParamCache(newCache); err != nil {
-				t.log.WithFields(logrus.Fields{"error": err, "cache": newCache}).Error("failed to save param to database cache")
-			} else {
-				// 更新TTL缓存
-				t.ttlManager.Update(addr)
-			}
+			// 成功计算diff，存储压缩数据
+			paramStoreData.Data = compress(diff)
+			paramStoreData.BaseID = cache.BaseID
 		}
+	} else {
+		// 首次遇到这个对象，存储完整数据并标记需要创建缓存
+		compressedData := compress(receiverDataStr)
+		paramStoreData.Data = compressedData
+		needCreateCache = true
+	}
+	t.paramCacheLock.Unlock()
 
+	// 在锁外进行数据库操作（如果需要创建新缓存）
+	if needCreateCache {
+		newCache := &model.ParamCache{
+			Addr:   stableKey, // 使用稳定的对象键
+			BaseID: paramStoreData.ID,
+			Data:   paramStoreData.Data,
+		}
+		// 使用INSERT OR REPLACE避免并发插入冲突
+		if _, err := repositoryFactory.GetParamRepository().SaveParamCache(newCache); err != nil {
+			// 缓存保存失败不影响主流程，仅记录警告
+			t.log.WithFields(logrus.Fields{"error": err, "stableKey": stableKey}).Warn("failed to save param cache")
+		}
+	}
+	// 只要访问，就更新TTL
+
+	t.sendOp(&DataOp{
+		OpType: OpTypeInsert,
+		Arg:    paramStoreData,
+	})
+
+	// 处理其他参数 (这部分不需要在锁内)
+	for i := 1; i < len(params); i++ {
+		otherParamData := &model.ParamStoreData{
+			ID:       t.gParamId.Add(1),
+			TraceID:  traceID,
+			Position: i,
+			Data:     compress(objDump.Sdump(params[i])),
+		}
 		t.sendOp(&DataOp{
 			OpType: OpTypeInsert,
-			Arg:    paramStoreData,
+			Arg:    otherParamData,
 		})
-
-		// 处理其他参数 (这部分不需要在锁内)
-		for i := 1; i < len(params); i++ {
-			otherParamData := &model.ParamStoreData{
-				ID:       t.gParamId.Add(1),
-				TraceID:  traceID,
-				Position: i,
-				Data:     compress(objDump.Sdump(params[i])),
-			}
-			t.sendOp(&DataOp{
-				OpType: OpTypeInsert,
-				Arg:    otherParamData,
-			})
-		}
-	})
-}
-
-// safeSetFinalizer wraps runtime.SetFinalizer with a recover mechanism to prevent panics.
-func (t *TraceInstance) safeSetFinalizer(obj interface{}) {
-	defer func() {
-		if r := recover(); r != nil {
-			t.log.WithFields(logrus.Fields{
-				"error": r,
-				"type":  fmt.Sprintf("%T", obj),
-				"addr":  t.GetAddrKey(obj),
-			}).Error("runtime.SetFinalizer failed. This is likely because the traced method's receiver is a pointer to a field within another struct, not a pointer to a separately allocated object. Caching for this object will not be automatically cleaned up by the garbage collector.")
-		}
-	}()
-	runtime.SetFinalizer(obj, t.finalizer)
-}
-
-// finalizer is the function called by the Go runtime when a cached object is garbage collected.
-func (t *TraceInstance) finalizer(obj interface{}) {
-	t.safeExecute(func() {
-		addr := t.GetAddrKey(obj)
-		if addr == "" {
-			return // Should not happen if SetFinalizer was called correctly
-		}
-
-		t.paramCacheLock.Lock()
-		defer t.paramCacheLock.Unlock()
-
-		err := repositoryFactory.GetParamRepository().DeleteParamCacheByAddr(addr)
-		if err != nil {
-			t.log.WithFields(logrus.Fields{"error": err, "addr": addr}).Error("failed to delete param cache in finalizer")
-		} else {
-			t.log.WithFields(logrus.Fields{"addr": addr}).Info("successfully deleted param cache in finalizer")
-		}
-	})
+	}
 }
 
 // storeParam 存储参数数据
