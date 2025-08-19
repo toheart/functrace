@@ -65,13 +65,6 @@ func (t *TraceInstance) EnterTrace(id uint64, name string, params []interface{})
 	return traceData, startTime
 }
 
-// prepareTraceInfo 准备跟踪信息并返回缩进级别、父ID和新的跟踪ID
-func (t *TraceInstance) prepareTraceInfo(id uint64) (indent int, parentId int64, traceId int64) {
-	// 为了兼容旧路径保留，但当前逻辑由 TraceSession 管理
-	session := t.sessions.GetOrCreate(id)
-	return session.PrepareEnter(t)
-}
-
 // ExitTrace 记录函数调用的结束并减少跟踪缩进
 func (t *TraceInstance) ExitTrace(info *GoroutineInfo, traceData *model.TraceData, startTime time.Time) {
 	// 计算函数执行时间（无论是否出错都要记录）
@@ -206,7 +199,9 @@ func (t *TraceInstance) isStructMethod(fullName string) FuncInfo {
 
 func (t *TraceInstance) SkipFunction(name string) bool {
 	for _, ignoreName := range t.config.IgnoreNames {
-		if strings.Contains(name, ignoreName) {
+		nameLower := strings.ToLower(name)
+		ignoreNameLower := strings.ToLower(ignoreName)
+		if strings.Contains(nameLower, ignoreNameLower) {
 			return true
 		}
 	}

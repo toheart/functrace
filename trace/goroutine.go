@@ -35,7 +35,8 @@ func (t *TraceInstance) InitGoroutineIfNeeded(gid uint64, name string) (info *Go
 	}
 	t.GoroutineRunning[gid] = info
 
-	t.sendOp(&DataOp{
+	// 构造待发送的 op（锁内不发送）
+	op := &DataOp{
 		OpType: OpTypeInsert,
 		Arg: &model.GoroutineTrace{
 			ID:           int64(id),
@@ -44,7 +45,15 @@ func (t *TraceInstance) InitGoroutineIfNeeded(gid uint64, name string) (info *Go
 			IsFinished:   0,
 			InitFuncName: name,
 		},
-	})
+	}
+	// 解锁后发送
+	go func() {
+		if t.pipelines != nil {
+			t.pipelines.Goroutine.Insert(op.Arg.(*model.GoroutineTrace))
+			return
+		}
+		t.sendOp(op)
+	}()
 
 	t.log.WithFields(logrus.Fields{"goroutine": id, "initFunc": name}).Info("initialized goroutine trace")
 

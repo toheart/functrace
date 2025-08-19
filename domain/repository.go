@@ -21,6 +21,9 @@ type ParamRepository interface {
 	// SaveParam 保存参数数据
 	SaveParam(param *model.ParamStoreData) (int64, error)
 
+	// SaveParamsBatch 批量保存参数数据（应使用单事务）
+	SaveParamsBatch(params []*model.ParamStoreData) error
+
 	// FindParamsByTraceID 根据跟踪ID查找参数
 	FindParamsByTraceID(traceId int64) ([]model.ParamStoreData, error)
 

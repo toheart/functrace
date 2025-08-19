@@ -32,6 +32,9 @@ type Config struct {
 	// 对象序列化配置
 	MaxElementsPerContainer int  // 单个容器最大递归元素数
 	AllowUnexportedParams   bool // 是否允许序列化未导出字段
+
+	// Trace 分片写入配置
+	TraceShardNum int // Trace 分片数量（用于按 traceId 分片写入）
 }
 
 // configField 配置字段定义
@@ -126,6 +129,16 @@ var configFields = map[string]configField{
 			return err == nil
 		},
 	},
+	"TraceShardNum": {
+		envKey:       "FUNCTRACE_TRACE_SHARD_NUM",
+		defaultValue: 16,
+		validator: func(v string) bool {
+			if i, err := strconv.Atoi(v); err == nil && i > 0 {
+				return true
+			}
+			return false
+		},
+	},
 }
 
 // NewConfig 创建新的配置实例
@@ -133,6 +146,7 @@ func NewConfig() *Config {
 	config := &Config{
 		LogFileName:             LogFileName,
 		MaxElementsPerContainer: 20,
+		TraceShardNum:           16,
 	}
 
 	// 加载所有配置
@@ -171,6 +185,9 @@ func (c *Config) loadFromEnv() {
 
 	// 是否允许序列化未导出字段
 	c.AllowUnexportedParams = c.getBoolEnv("AllowUnexportedParams")
+
+	// Trace 分片数量
+	c.TraceShardNum = c.getIntEnv("TraceShardNum")
 }
 
 // getStringEnv 获取字符串环境变量

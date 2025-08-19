@@ -29,9 +29,10 @@ func Trace(params []interface{}) func() {
 	name := fn.Name()
 	// 检查是否应该跳过此函数
 	if instance.SkipFunction(name) {
+		instance.GetLogger().WithFields(logrus.Fields{"name": name}).Info("skip function")
 		return func() {}
 	}
-
+	instance.GetLogger().WithFields(logrus.Fields{"name": name}).Info("enter function")
 	// 原子化地初始化goroutine和trace缩进，避免并发安全问题
 	info, _ := instance.InitGoroutineAndTraceAtomic(gid, name)
 

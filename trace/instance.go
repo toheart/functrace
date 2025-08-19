@@ -9,12 +9,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"context"
+
 	"github.com/sirupsen/logrus"
 	"github.com/sourcegraph/conc/pool"
 	"github.com/toheart/functrace/domain"
 	"github.com/toheart/functrace/domain/model"
 	objDump "github.com/toheart/functrace/objectdump"
 	"github.com/toheart/functrace/persistence/factory"
+	"golang.org/x/sync/singleflight"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -74,7 +77,22 @@ type TraceInstance struct {
 
 	// 会话注册表
 	sessions *SessionRegistry
+
+	// 指针接收者 singleflight 合并
+	recvSFG singleflight.Group
+
+	// 统一的流水线外观（骨架）
+	pipelines *Pipelines
+
+	// 关闭标志（原子），用于无锁 sendOp 判断
+	closedFlag atomic.Bool
+
+	// 根上下文与取消函数，用于优雅关闭后台协程
+	ctx    context.Context
+	cancel context.CancelFunc
 }
+
+// 已迁移：Trace 分片逻辑在 TracePipeline 中实现（见 pipeline.go）
 
 // NewTraceInstance 初始化并返回 TraceInstance 的单例实例
 func NewTraceInstance() *TraceInstance {
@@ -153,6 +171,18 @@ func initTraceInstance() {
 	)
 	// 设置spew配置
 	instance.SetSpewConfig()
+
+	// 初始化 Trace 分片写入器（按 traceId 分片）
+	shardNum := instance.config.TraceShardNum
+	if shardNum <= 0 {
+		shardNum = 16
+	}
+	// 根上下文
+	instance.ctx, instance.cancel = context.WithCancel(context.Background())
+	// 初始化 Pipelines（内含 trace 分片）
+	instance.pipelines = NewPipelines(instance.ctx, instance)
+	instance.pipelines.Start()
+	instance.log.WithFields(logrus.Fields{"shard_num": shardNum}).Info("trace shards initialized")
 }
 
 func (t *TraceInstance) StartOpChan() {
@@ -175,20 +205,49 @@ func (t *TraceInstance) StartOpChan() {
 func (t *TraceInstance) insertOp(op *DataOp) {
 	switch op.Arg.(type) {
 	case *model.TraceData:
-		t.saveTraceData(op.Arg.(*model.TraceData))
+		// 路由到 Trace pipeline（插入）
+		if t.pipelines != nil {
+			t.pipelines.Trace.Insert(op.Arg.(*model.TraceData))
+		} else {
+			// 已迁移到 TracePipeline，实现见 pipeline.go
+		}
 	case *model.ParamStoreData:
-		t.storeParam(op.Arg.(*model.ParamStoreData))
+		// 路由到 Param pipeline（批量）
+		if t.pipelines != nil {
+			t.pipelines.Param.Enqueue(op.Arg.(*model.ParamStoreData))
+		} else {
+			t.storeParam(op.Arg.(*model.ParamStoreData))
+		}
 	case *model.GoroutineTrace:
-		t.saveGoroutineTrace(op.Arg.(*model.GoroutineTrace))
+		// 路由到 Goroutine pipeline（插入）
+		if t.pipelines != nil {
+			t.pipelines.Goroutine.Insert(op.Arg.(*model.GoroutineTrace))
+		} else {
+			t.saveGoroutineTrace(op.Arg.(*model.GoroutineTrace))
+		}
+	case *processParamTask:
+		t.handleProcessParamTask(op.Arg.(*processParamTask))
+	case *processPointerReceiverTask:
+		t.handleProcessPointerReceiverTask(op.Arg.(*processPointerReceiverTask))
 	}
 }
 
 func (t *TraceInstance) updateOp(op *DataOp) {
 	switch op.Arg.(type) {
 	case *model.TraceData:
-		t.updateTraceData(op.Arg.(*model.TraceData))
+		// 路由到 Trace pipeline（更新）
+		if t.pipelines != nil {
+			t.pipelines.Trace.Update(op.Arg.(*model.TraceData))
+		} else {
+			// 已迁移到 TracePipeline，实现见 pipeline.go
+		}
 	case *model.GoroutineTrace:
-		t.updateGoroutineTimeCost(op.Arg.(*model.GoroutineTrace))
+		// 路由到 Goroutine pipeline（更新）
+		if t.pipelines != nil {
+			t.pipelines.Goroutine.Update(op.Arg.(*model.GoroutineTrace))
+		} else {
+			t.updateGoroutineTimeCost(op.Arg.(*model.GoroutineTrace))
+		}
 	}
 }
 
@@ -332,16 +391,13 @@ func (t *TraceInstance) createNewGoroutineAndTrace(gid uint64, name string) (inf
 	}
 
 	// 发送数据库操作
-	t.sendOp(&DataOp{
-		OpType: OpTypeInsert,
-		Arg: &model.GoroutineTrace{
-			ID:           int64(id),
-			OriginGID:    gid,
-			CreateTime:   start.Format(TimeFormat),
-			IsFinished:   0,
-			InitFuncName: name,
-		},
-	})
+	go func(gt *model.GoroutineTrace) {
+		if t.pipelines != nil {
+			t.pipelines.Goroutine.Insert(gt)
+			return
+		}
+		t.sendOp(&DataOp{OpType: OpTypeInsert, Arg: gt})
+	}(&model.GoroutineTrace{ID: int64(id), OriginGID: gid, CreateTime: start.Format(TimeFormat), IsFinished: 0, InitFuncName: name})
 
 	t.log.WithFields(logrus.Fields{"goroutine": id, "initFunc": name}).Info("initialized goroutine trace atomically")
 
@@ -381,6 +437,7 @@ func (t *TraceInstance) Close() error {
 
 	// 标记为已关闭
 	t.closed = true
+	t.closedFlag.Store(true) // 原子化地设置关闭标志
 
 	// 发送停止监控信号（确保只关闭一次）
 	stopOnce.Do(func() {
@@ -400,6 +457,11 @@ func (t *TraceInstance) Close() error {
 	if t.config.InsertMode == AsyncMode {
 		close(t.OpChan)
 		<-t.dataClose
+	}
+
+	// 停止 pipelines（取消 ctx）
+	if t.pipelines != nil {
+		t.pipelines.Stop()
 	}
 
 	// 关闭数据库连接
@@ -446,49 +508,25 @@ func GetRepositoryFactory() domain.RepositoryFactory {
 	return repositoryFactory
 }
 
-func (t *TraceInstance) saveTraceData(trace *model.TraceData) {
-	t.log.WithFields(logrus.Fields{"trace": trace}).Info("save trace data")
-	_, err := repositoryFactory.GetTraceRepository().SaveTrace(trace)
-	if err != nil {
-		t.log.WithFields(logrus.Fields{"error": err, "trace": trace}).Error("save trace data failed")
-	}
-}
-
-func (t *TraceInstance) updateTraceData(trace *model.TraceData) {
-	err := repositoryFactory.GetTraceRepository().UpdateTraceTimeCost(trace.ID, trace.TimeCost)
-	if err != nil {
-		// 将数据重新插回队列
-		t.sendOp(&DataOp{
-			OpType: OpTypeUpdate,
-			Arg:    trace,
-		})
-		t.log.WithFields(logrus.Fields{"error": err, "trace": trace}).Error("update trace data failed, requeue")
-	}
-}
-
 func (t *TraceInstance) sendOp(op *DataOp) {
 	// 根据插入模式决定是同步执行还是通过通道异步执行
 	if t.config.InsertMode == SyncMode {
 		t.executeOp(op)
-	} else {
-		// 检查是否已关闭，避免向已关闭的通道写入
-		t.RLock()
-		if t.closed {
-			t.RUnlock()
-			// 已关闭，改为同步执行以确保数据不丢失
-			t.executeOp(op)
-			return
-		}
-
-		// 使用select避免阻塞，如果通道满了则同步执行
-		select {
-		case t.OpChan <- op:
-			t.RUnlock()
-		default:
-			t.RUnlock()
-			// 通道满了，同步执行避免丢失数据
-			t.executeOp(op)
-		}
+		return
+	}
+	// 无锁判断关闭状态
+	if t.closedFlag.Load() {
+		// 已关闭，改为同步执行以确保数据不丢失
+		t.executeOp(op)
+		return
+	}
+	// 使用select避免阻塞，如果通道满了则同步执行
+	select {
+	case t.OpChan <- op:
+		// ok
+	default:
+		// 通道满了，同步执行避免丢失数据
+		t.executeOp(op)
 	}
 }
 

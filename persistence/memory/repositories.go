@@ -69,6 +69,12 @@ func (r *MemParamRepository) SaveParam(param *model.ParamStoreData) (int64, erro
 	return 1, nil
 }
 
+// SaveParamsBatch 批量保存参数数据（内存实现仅日志输出）
+func (r *MemParamRepository) SaveParamsBatch(params []*model.ParamStoreData) error {
+	r.logger.WithField("count", len(params)).Info("Mock批量保存参数数据")
+	return nil
+}
+
 // SaveParamCache 保存参数缓存
 func (r *MemParamRepository) SaveParamCache(cache *model.ParamCache) (int64, error) {
 	r.logger.WithField("cache", cache).Info("Mock保存参数缓存")

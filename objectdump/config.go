@@ -62,7 +62,7 @@ type ConfigState struct {
 }
 
 // Config is the active configuration of the top-level functions.
-var Config = ConfigState{Indent: " ", MaxElementsPerContainer: 100, AllowUnexported: true, CompactLargeObjects: true}
+var Config = ConfigState{Indent: " ", MaxElementsPerContainer: 10, AllowUnexported: true, CompactLargeObjects: true}
 
 func SetGlobalConfig(config *ConfigState) {
 	Config = *config

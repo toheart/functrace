@@ -38,6 +38,30 @@ func (r *ParamRepository) SaveParam(param *model.ParamStoreData) (int64, error) 
 	return result.LastInsertId()
 }
 
+// SaveParamsBatch 批量保存参数数据（单事务）
+func (r *ParamRepository) SaveParamsBatch(params []*model.ParamStoreData) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx error: %w", err)
+	}
+	stmt, err := tx.Prepare(SQLInsertParam)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("prepare insert param error: %w", err)
+	}
+	defer stmt.Close()
+	for _, p := range params {
+		if _, err := stmt.Exec(p.ID, p.TraceID, p.Position, p.Data, p.IsReceiver, p.BaseID); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("batch save param error: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tx error: %w", err)
+	}
+	return nil
+}
+
 // FindParamsByTraceID 根据跟踪ID查找参数
 func (r *ParamRepository) FindParamsByTraceID(traceId int64) ([]model.ParamStoreData, error) {
 	rows, err := r.db.Query("SELECT id, traceId, position, data, isReceiver, baseId FROM ParamStore WHERE traceId = ?", traceId)

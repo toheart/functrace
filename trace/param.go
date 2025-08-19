@@ -2,7 +2,6 @@ package trace
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -73,18 +72,24 @@ func decompress(data []byte) string {
 	return string(decompressed)
 }
 
+// sdumpSafe 安全地对对象进行转储，避免 objectdump 在 unsafe 反射时触发 checkptr panic
+func sdumpSafe(v interface{}) (s string) {
+	defer func() {
+		if r := recover(); r != nil {
+			// 发生 panic 时回退到类型名，避免崩溃
+			s = fmt.Sprintf("%T", v)
+		}
+	}()
+	return objDump.Sdump(v)
+}
+
 // DealNormalMethod 处理普通方法的参数
 func (t *TraceInstance) DealNormalMethod(traceID int64, params []interface{}) {
 	for i, item := range params {
-		paramStoreData := &model.ParamStoreData{
-			ID:       t.nextParamID(idHint(params, i)),
-			TraceID:  traceID,
-			Position: i,
-			Data:     compress(objDump.Sdump(item)),
-		}
+		// 下沉到后台处理，减轻热路径负担
 		t.sendOp(&DataOp{
 			OpType: OpTypeInsert,
-			Arg:    paramStoreData,
+			Arg:    &processParamTask{TraceID: traceID, Position: i, Value: item},
 		})
 	}
 }
@@ -92,15 +97,9 @@ func (t *TraceInstance) DealNormalMethod(traceID int64, params []interface{}) {
 // DealValueMethod 处理值方法的参数
 func (t *TraceInstance) DealValueMethod(traceID int64, params []interface{}) {
 	for i, item := range params {
-		paramStoreData := &model.ParamStoreData{
-			ID:       t.nextParamID(idHint(params, i)),
-			TraceID:  traceID,
-			Position: i,
-			Data:     compress(objDump.Sdump(item)),
-		}
 		t.sendOp(&DataOp{
 			OpType: OpTypeInsert,
-			Arg:    paramStoreData,
+			Arg:    &processParamTask{TraceID: traceID, Position: i, Value: item},
 		})
 	}
 }
@@ -196,77 +195,17 @@ func (t *TraceInstance) DealPointerMethod(traceID int64, params []interface{}) {
 		return
 	}
 
-	receiverDataStr := objDump.Sdump(receiver)
-
-	paramStoreData := &model.ParamStoreData{
-		ID:         t.nextParamID(0),
-		TraceID:    traceID,
-		Position:   0,
-		IsReceiver: true,
-	}
-
-	// 先在锁外进行数据库查询，避免长时间持有锁
-	cache, err := repositoryFactory.GetParamRepository().FindParamCacheByAddr(stableKey)
-
-	// 在锁内处理缓存逻辑，进行快速的内存操作
-	t.paramCacheLock.Lock()
-	needCreateCache := false
-
-	if err != nil {
-		// 数据库查询失败，记录错误并存储完整数据
-		t.log.WithFields(logrus.Fields{"error": err, "stableKey": stableKey}).Error("failed to get param from database cache")
-		paramStoreData.Data = compress(receiverDataStr)
-	} else if cache != nil {
-		// 缓存存在，计算差异
-		originalDataStr := decompress(cache.Data)
-		if diff, err := createJSONPatch(originalDataStr, receiverDataStr); err != nil {
-			// diff计算失败，存储完整数据（实用主义：不影响主流程）
-			t.log.WithFields(logrus.Fields{"error": err, "stableKey": stableKey}).Warn("failed to create json patch, storing full data")
-			paramStoreData.Data = compress(receiverDataStr)
-		} else {
-			// 成功计算diff，存储压缩数据
-			paramStoreData.Data = compress(diff)
-			paramStoreData.BaseID = cache.BaseID
-		}
-	} else {
-		// 首次遇到这个对象，存储完整数据并标记需要创建缓存
-		compressedData := compress(receiverDataStr)
-		paramStoreData.Data = compressedData
-		needCreateCache = true
-	}
-	t.paramCacheLock.Unlock()
-
-	// 在锁外进行数据库操作（如果需要创建新缓存）
-	if needCreateCache {
-		newCache := &model.ParamCache{
-			Addr:   stableKey, // 使用稳定的对象键
-			BaseID: paramStoreData.ID,
-			Data:   paramStoreData.Data,
-		}
-		// 使用INSERT OR REPLACE避免并发插入冲突
-		if _, err := repositoryFactory.GetParamRepository().SaveParamCache(newCache); err != nil {
-			// 缓存保存失败不影响主流程，仅记录警告
-			t.log.WithFields(logrus.Fields{"error": err, "stableKey": stableKey}).Warn("failed to save param cache")
-		}
-	}
-	// 只要访问，就更新TTL
-
+	// 接收者下沉到后台任务
 	t.sendOp(&DataOp{
 		OpType: OpTypeInsert,
-		Arg:    paramStoreData,
+		Arg:    &processPointerReceiverTask{TraceID: traceID, StableKey: stableKey, Receiver: receiver},
 	})
 
-	// 处理其他参数 (这部分不需要在锁内)
+	// 其他参数（从索引1开始）
 	for i := 1; i < len(params); i++ {
-		otherParamData := &model.ParamStoreData{
-			ID:       t.nextParamID(0),
-			TraceID:  traceID,
-			Position: i,
-			Data:     compress(objDump.Sdump(params[i])),
-		}
 		t.sendOp(&DataOp{
 			OpType: OpTypeInsert,
-			Arg:    otherParamData,
+			Arg:    &processParamTask{TraceID: traceID, Position: i, Value: params[i]},
 		})
 	}
 }
@@ -274,8 +213,15 @@ func (t *TraceInstance) DealPointerMethod(traceID int64, params []interface{}) {
 // storeParam 存储参数数据
 func (t *TraceInstance) storeParam(param *model.ParamStoreData) {
 	t.safeExecute(func() {
-		_, err := repositoryFactory.GetParamRepository().SaveParam(param)
-		if err != nil {
+		// 交给批量器处理；若已关闭或通道不可用，则直接降级为单条写入，避免 panic/丢失
+		if t.closedFlag.Load() {
+			if _, err := repositoryFactory.GetParamRepository().SaveParam(param); err != nil {
+				t.log.WithFields(logrus.Fields{"error": err, "param": param}).Error("save param failed")
+			}
+			return
+		}
+		// 迁移后批量器由 ParamPipeline 管理，storeParam 仅做降级直写
+		if _, err := repositoryFactory.GetParamRepository().SaveParam(param); err != nil {
 			t.log.WithFields(logrus.Fields{"error": err, "param": param}).Error("save param failed")
 		}
 	})
@@ -283,27 +229,112 @@ func (t *TraceInstance) storeParam(param *model.ParamStoreData) {
 
 // createJSONPatch 创建JSON差异
 func createJSONPatch(original, modified string) (string, error) {
-	var origObj, modObj interface{}
-	if err := json.Unmarshal([]byte(original), &origObj); err != nil {
-		return "", fmt.Errorf("can't unmarshal original: %w, original: %s", err, original)
+	if original == modified {
+		return "{}", nil
 	}
-	if err := json.Unmarshal([]byte(modified), &modObj); err != nil {
-		return "", fmt.Errorf("can't unmarshal modified: %w, modified: %s", err, modified)
-	}
-	origCopy, err := json.Marshal(origObj)
-	if err != nil {
-		return "", fmt.Errorf("can't marshal original copy: %w", err)
-	}
-	modCopy, err := json.Marshal(modObj)
-	if err != nil {
-		return "", fmt.Errorf("can't marshal modified copy: %w", err)
-	}
-	patch, err := jsonpatch.CreateMergePatch(origCopy, modCopy)
+	patch, err := jsonpatch.CreateMergePatch([]byte(original), []byte(modified))
 	if err != nil {
 		return "", fmt.Errorf("can't create json patch: %w", err)
 	}
-	if string(patch) == "" {
+	if len(patch) == 0 {
 		return "{}", nil
 	}
 	return string(patch), nil
+}
+
+// 后台参数处理任务类型
+type processParamTask struct {
+	TraceID  int64
+	Position int
+	Value    interface{}
+}
+
+type processPointerReceiverTask struct {
+	TraceID   int64
+	StableKey string
+	Receiver  interface{}
+}
+
+// 处理普通/值参数的后台任务
+func (t *TraceInstance) handleProcessParamTask(task *processParamTask) {
+	dumped := sdumpSafe(task.Value)
+	data := compress(dumped)
+	paramStoreData := &model.ParamStoreData{
+		ID:       t.nextParamID(uint64(task.Position + 1)),
+		TraceID:  task.TraceID,
+		Position: task.Position,
+		Data:     data,
+	}
+	if t.pipelines != nil {
+		t.pipelines.Param.Enqueue(paramStoreData)
+		return
+	}
+	t.storeParam(paramStoreData)
+}
+
+// 处理指针接收者的后台任务（含差异与缓存）
+func (t *TraceInstance) handleProcessPointerReceiverTask(task *processPointerReceiverTask) {
+	receiverDataStr := sdumpSafe(task.Receiver)
+
+	paramStoreData := &model.ParamStoreData{
+		ID:         t.nextParamID(0),
+		TraceID:    task.TraceID,
+		Position:   0,
+		IsReceiver: true,
+	}
+
+	// 先在锁外进行数据库查询（singleflight 合并）
+	var (
+		cache *model.ParamCache
+		err   error
+	)
+	key := "recv:" + task.StableKey
+	_, _, _ = t.recvSFG.Do(key, func() (interface{}, error) {
+		cache, err = repositoryFactory.GetParamRepository().FindParamCacheByAddr(task.StableKey)
+		return nil, nil
+	})
+
+	// 在锁内处理内存状态
+	t.paramCacheLock.Lock()
+	needCreateCache := false
+
+	if err != nil {
+		t.log.WithFields(logrus.Fields{"error": err, "stableKey": task.StableKey}).Error("failed to get param from database cache")
+		paramStoreData.Data = compress(receiverDataStr)
+	} else if cache != nil {
+		originalDataStr := decompress(cache.Data)
+		if diff, err := createJSONPatch(originalDataStr, receiverDataStr); err != nil {
+			t.log.WithFields(logrus.Fields{"error": err, "stableKey": task.StableKey}).Warn("failed to create json patch, storing full data")
+			paramStoreData.Data = compress(receiverDataStr)
+		} else {
+			paramStoreData.Data = compress(diff)
+			paramStoreData.BaseID = cache.BaseID
+		}
+	} else {
+		// 首次遇到这个对象
+		compressedData := compress(receiverDataStr)
+		paramStoreData.Data = compressedData
+		needCreateCache = true
+	}
+	t.paramCacheLock.Unlock()
+
+	if needCreateCache {
+		newCache := &model.ParamCache{
+			Addr:   task.StableKey,
+			BaseID: paramStoreData.ID,
+			Data:   paramStoreData.Data,
+		}
+		_, _, _ = t.recvSFG.Do(key+":save", func() (interface{}, error) {
+			if _, err := repositoryFactory.GetParamRepository().SaveParamCache(newCache); err != nil {
+				t.log.WithFields(logrus.Fields{"error": err, "stableKey": task.StableKey}).Warn("failed to save param cache")
+			}
+			return nil, nil
+		})
+	}
+
+	if t.pipelines != nil {
+		t.pipelines.Param.Enqueue(paramStoreData)
+		return
+	}
+	t.storeParam(paramStoreData)
 }
