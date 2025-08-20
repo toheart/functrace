@@ -73,6 +73,14 @@ func (d *mapDumper) dump(ds *dumpState, v reflect.Value, depth int) interface{} 
 		return nil
 	}
 
+	// 当未开启 map 深度解析时，返回摘要信息（类型 + 长度 + 容量）
+	if !ds.cs.ParseMapValues {
+		return map[string]interface{}{
+			"type": v.Type().String(),
+			"len":  v.Len(),
+		}
+	}
+
 	// 快速限制拷贝策略：只拷贝有限数量的键值对，减少并发访问时间
 	maxElem := ds.cs.MaxElementsPerContainer
 	if maxElem <= 0 {

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"runtime"
 	"strconv"
+	"sync"
 
 	"github.com/sirupsen/logrus"
 	"github.com/toheart/functrace/trace"
@@ -16,22 +17,28 @@ func Trace(params []interface{}) func() {
 	// 获取 TraceInstance 单例
 	instance := trace.NewTraceInstance()
 
-	// 获取调用者信息
+	// 获取调用者信息（PC）
 	pc, _, _, ok := runtime.Caller(1)
 	if !ok {
 		instance.GetLogger().WithFields(nil).Error("can't get caller info")
 		return func() {}
 	}
 
-	// 获取 goroutine ID 和函数名
-	gid := getGID()
-	fn := runtime.FuncForPC(pc)
-	name := fn.Name()
-	// 检查是否应该跳过此函数
-	if instance.SkipFunction(name) {
+	// 基于 PC 的快速跳过判断
+	skip, name := trace.ShouldSkipPC(pc, instance.SkipFunction)
+	if skip {
 		instance.GetLogger().WithFields(logrus.Fields{"name": name}).Info("skip function")
 		return func() {}
 	}
+	if name == "" {
+		if fn := runtime.FuncForPC(pc); fn != nil {
+			name = fn.Name()
+		}
+	}
+
+	// 仅在未跳过时获取 goroutine ID（缓冲池）
+	gid := getGID()
+
 	instance.GetLogger().WithFields(logrus.Fields{"name": name}).Info("enter function")
 	// 原子化地初始化goroutine和trace缩进，避免并发安全问题
 	info, _ := instance.InitGoroutineAndTraceAtomic(gid, name)
@@ -56,11 +63,20 @@ func GetLogger() *logrus.Logger {
 }
 
 // getGID 获取当前goroutine的ID
+var gidBufPool = sync.Pool{New: func() interface{} { return make([]byte, 64) }}
+
 func getGID() uint64 {
-	b := make([]byte, 64)
-	b = b[:runtime.Stack(b, false)]
-	b = bytes.TrimPrefix(b, []byte("goroutine "))
-	b = b[:bytes.IndexByte(b, ' ')]
-	n, _ := strconv.ParseUint(string(b), 10, 64)
-	return n
+	b := gidBufPool.Get().([]byte)
+	n := runtime.Stack(b, false)
+	if n > len(b) {
+		n = len(b)
+	}
+	s := b[:n]
+	s = bytes.TrimPrefix(s, []byte("goroutine "))
+	if i := bytes.IndexByte(s, ' '); i >= 0 {
+		s = s[:i]
+	}
+	id, _ := strconv.ParseUint(string(s), 10, 64)
+	gidBufPool.Put(b)
+	return id
 }

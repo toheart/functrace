@@ -59,10 +59,14 @@ type ConfigState struct {
 	// string representation instead of full internal structure.
 	// This is enabled by default to avoid extremely large outputs.
 	CompactLargeObjects bool
+
+	// ParseMapValues controls whether to deeply parse map entries.
+	// When disabled (default), map and *map are summarized as type and length only.
+	ParseMapValues bool
 }
 
 // Config is the active configuration of the top-level functions.
-var Config = ConfigState{Indent: " ", MaxElementsPerContainer: 10, AllowUnexported: true, CompactLargeObjects: true}
+var Config = ConfigState{Indent: " ", MaxElementsPerContainer: 10, AllowUnexported: true, CompactLargeObjects: true, ParseMapValues: false}
 
 func SetGlobalConfig(config *ConfigState) {
 	Config = *config
