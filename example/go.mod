@@ -1,8 +1,6 @@
 module github.com/toheart/functrace/example
 
-go 1.23.0
-
-toolchain go1.23.9
+go 1.20
 
 require github.com/toheart/functrace v0.0.0
 

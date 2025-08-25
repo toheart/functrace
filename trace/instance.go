@@ -226,9 +226,17 @@ func (t *TraceInstance) insertOp(op *DataOp) {
 			t.saveGoroutineTrace(op.Arg.(*model.GoroutineTrace))
 		}
 	case *processParamTask:
-		t.handleProcessParamTask(op.Arg.(*processParamTask))
+		if t.pipelines != nil {
+			t.pipelines.Param.EnqueueTask(op.Arg.(*processParamTask))
+		} else {
+			t.handleProcessParamTask(op.Arg.(*processParamTask))
+		}
 	case *processPointerReceiverTask:
-		t.handleProcessPointerReceiverTask(op.Arg.(*processPointerReceiverTask))
+		if t.pipelines != nil {
+			t.pipelines.Param.EnqueueTask(op.Arg.(*processPointerReceiverTask))
+		} else {
+			t.handleProcessPointerReceiverTask(op.Arg.(*processPointerReceiverTask))
+		}
 	}
 }
 
@@ -504,8 +512,16 @@ func (t *TraceInstance) GetLogger() *logrus.Logger {
 }
 
 // GetRepositoryFactory 获取仓储工厂
-func GetRepositoryFactory() domain.RepositoryFactory {
+func (t *TraceInstance) GetRepositoryFactory() domain.RepositoryFactory {
 	return repositoryFactory
+}
+
+// nextTraceID 使用分片ID生成器生成全局唯一的 TraceID（统一入口）
+func (t *TraceInstance) nextTraceID(shardKey uint64) int64 {
+	if t.idGen != nil {
+		return t.idGen.NextTraceID(shardKey)
+	}
+	return t.globalId.Add(1)
 }
 
 func (t *TraceInstance) sendOp(op *DataOp) {

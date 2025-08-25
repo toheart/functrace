@@ -41,7 +41,7 @@ const (
 	// 可选值: "none"(不保存参数，默认), "normal"(保存普通参数), "all"(全保存)
 	EnvParamStoreMode = "FUNCTRACE_PARAM_STORE_MODE"
 
-	IgnoreNames = "log,context,string"
+	IgnoreNames = "context,string"
 	// 默认最大深度
 	DefaultMaxDepth = 3
 	// 时间格式

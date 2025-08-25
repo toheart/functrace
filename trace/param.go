@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/klauspost/compress/zstd"
@@ -30,43 +31,51 @@ func idHint(params []interface{}, index int) uint64 {
 
 var (
 	magicNumber = []byte{'F', 'T', 'Z', '$'} // Fun-Trace-Zstd Magic Number
+
+	zstdOnce    sync.Once
+	zstdEnc     *zstd.Encoder
+	zstdDec     *zstd.Decoder
+	zstdInitErr error
 )
 
+func ensureZstd() {
+	zstdOnce.Do(func() {
+		// 选择速度优先 preset；如需更高压缩比可调整
+		zstdEnc, zstdInitErr = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedFastest))
+		if zstdInitErr != nil {
+			return
+		}
+		zstdDec, zstdInitErr = zstd.NewReader(nil)
+	})
+}
+
 // compress uses zstd to compress a string and returns the compressed data prefixed with a magic number.
-// 为了线程安全，每次调用都创建新的编码器
 func compress(s string) []byte {
-	encoder, err := zstd.NewWriter(nil)
-	if err != nil {
-		// 如果创建编码器失败，返回未压缩数据
+	// 小于4KB直接不压缩，减少CPU开销
+	if len(s) < 4*1024 {
+		return []byte(s)
+	}
+	ensureZstd()
+	if zstdInitErr != nil || zstdEnc == nil {
 		return append(magicNumber, []byte(s)...)
 	}
-	defer encoder.Close()
-
-	compressed := encoder.EncodeAll([]byte(s), nil)
+	compressed := zstdEnc.EncodeAll([]byte(s), nil)
 	return append(magicNumber, compressed...)
 }
 
 // decompress uses zstd to decompress data. It checks for a magic number to identify
 // compressed data and includes a fallback for uncompressed or corrupted data.
-// 为了线程安全，每次调用都创建新的解码器
 func decompress(data []byte) string {
 	if len(data) < len(magicNumber) || !bytes.Equal(data[:len(magicNumber)], magicNumber) {
-		// Data doesn't have the magic number, so it's legacy uncompressed data.
+		// legacy/uncompressed
 		return string(data)
 	}
-
-	// Data has the magic number, so it should be decompressed.
-	decoder, err := zstd.NewReader(nil)
-	if err != nil {
-		// 如果创建解码器失败，返回原始数据
+	ensureZstd()
+	if zstdInitErr != nil || zstdDec == nil {
 		return string(data)
 	}
-	defer decoder.Close()
-
-	decompressed, err := decoder.DecodeAll(data[len(magicNumber):], nil)
+	decompressed, err := zstdDec.DecodeAll(data[len(magicNumber):], nil)
 	if err != nil {
-		// Data is corrupted. The calling function will fail to unmarshal it,
-		// which will be logged as a high-level error.
 		return string(data)
 	}
 	return string(decompressed)
@@ -294,8 +303,7 @@ func (t *TraceInstance) handleProcessPointerReceiverTask(task *processPointerRec
 		return nil, nil
 	})
 
-	// 在锁内处理内存状态
-	t.paramCacheLock.Lock()
+	// 缩小临界区：在锁外执行重活（解压/生成diff/压缩），仅保留必要的状态判断
 	needCreateCache := false
 
 	if err != nil {
@@ -303,8 +311,8 @@ func (t *TraceInstance) handleProcessPointerReceiverTask(task *processPointerRec
 		paramStoreData.Data = compress(receiverDataStr)
 	} else if cache != nil {
 		originalDataStr := decompress(cache.Data)
-		if diff, err := createJSONPatch(originalDataStr, receiverDataStr); err != nil {
-			t.log.WithFields(logrus.Fields{"error": err, "stableKey": task.StableKey}).Warn("failed to create json patch, storing full data")
+		if diff, derr := createJSONPatch(originalDataStr, receiverDataStr); derr != nil {
+			t.log.WithFields(logrus.Fields{"error": derr, "stableKey": task.StableKey}).Warn("failed to create json patch, storing full data")
 			paramStoreData.Data = compress(receiverDataStr)
 		} else {
 			paramStoreData.Data = compress(diff)
@@ -312,11 +320,9 @@ func (t *TraceInstance) handleProcessPointerReceiverTask(task *processPointerRec
 		}
 	} else {
 		// 首次遇到这个对象
-		compressedData := compress(receiverDataStr)
-		paramStoreData.Data = compressedData
+		paramStoreData.Data = compress(receiverDataStr)
 		needCreateCache = true
 	}
-	t.paramCacheLock.Unlock()
 
 	if needCreateCache {
 		newCache := &model.ParamCache{

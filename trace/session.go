@@ -47,11 +47,7 @@ func (s *TraceSession) PrepareEnter(inst *TraceInstance) (indent int, parentId i
 	parentId = s.parents[indent-1]
 
 	// 生成全局唯一traceId
-	if inst != nil && inst.idGen != nil {
-		traceId = inst.idGen.NextTraceID(s.gid)
-	} else {
-		traceId = inst.globalId.Add(1)
-	}
+	traceId = inst.nextTraceID(s.gid)
 
 	// 更新父映射与缩进
 	s.parents[indent] = traceId

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/toheart/functrace/domain/model"
 )
 
@@ -19,6 +20,8 @@ type TracePipeline interface {
 type ParamPipeline interface {
 	// Enqueue 提交参数数据进入批量器
 	Enqueue(p *model.ParamStoreData)
+	// EnqueueTask 提交原始任务（由管道线程完成 dump/diff/压缩/入库）
+	EnqueueTask(task interface{})
 }
 
 // GoroutinePipeline 定义 goroutine 插入与更新管道接口
@@ -52,7 +55,7 @@ func NewPipelines(parent context.Context, inst *TraceInstance) *Pipelines {
 		shardNum = 16
 	}
 	p.Trace = newTracePipeline(ctx, shardNum)
-	p.Param = newParamPipeline(ctx)
+	p.Param = newParamPipeline(ctx, inst)
 	p.Goroutine = newGoroutinePipeline(ctx)
 	return p
 }
@@ -237,13 +240,15 @@ func (s *tpShard) handleEvent(evt interface{}) {
 
 type paramPipeline struct {
 	ctx  context.Context
-	inCh chan *model.ParamStoreData
+	inCh chan interface{}
+	inst *TraceInstance
 }
 
-func newParamPipeline(ctx context.Context) *paramPipeline {
+func newParamPipeline(ctx context.Context, inst *TraceInstance) *paramPipeline {
 	p := &paramPipeline{
 		ctx:  ctx,
-		inCh: make(chan *model.ParamStoreData, 1000),
+		inCh: make(chan interface{}, 1000),
+		inst: inst,
 	}
 	go p.loop()
 	return p
@@ -256,6 +261,27 @@ func (p *paramPipeline) Enqueue(ps *model.ParamStoreData) {
 	default:
 		// 通道满：直接降级为单条写入
 		_, _ = repositoryFactory.GetParamRepository().SaveParam(ps)
+	}
+}
+
+func (p *paramPipeline) EnqueueTask(task interface{}) {
+	select {
+	case p.inCh <- task:
+		// ok
+	default:
+		// 通道满：退化到就地处理并直写（避免丢失）
+		switch t := task.(type) {
+		case *processParamTask:
+			ps := p.buildParamFromTask(t)
+			if ps != nil {
+				_, _ = repositoryFactory.GetParamRepository().SaveParam(ps)
+			}
+		case *processPointerReceiverTask:
+			ps := p.buildParamFromReceiverTask(t)
+			if ps != nil {
+				_, _ = repositoryFactory.GetParamRepository().SaveParam(ps)
+			}
+		}
 	}
 }
 
@@ -284,8 +310,21 @@ func (p *paramPipeline) loop() {
 		case <-p.ctx.Done():
 			flush()
 			return
-		case ps := <-p.inCh:
-			batch = append(batch, ps)
+		case evt := <-p.inCh:
+			switch e := evt.(type) {
+			case *model.ParamStoreData:
+				batch = append(batch, e)
+			case *processParamTask:
+				ps := p.buildParamFromTask(e)
+				if ps != nil {
+					batch = append(batch, ps)
+				}
+			case *processPointerReceiverTask:
+				ps := p.buildParamFromReceiverTask(e)
+				if ps != nil {
+					batch = append(batch, ps)
+				}
+			}
 			if len(batch) >= maxBatchSize {
 				flush()
 				if !timer.Stop() {
@@ -301,6 +340,79 @@ func (p *paramPipeline) loop() {
 			timer.Reset(flushInterval)
 		}
 	}
+}
+
+// 将普通/值参数任务构建为可入库的数据
+func (p *paramPipeline) buildParamFromTask(task *processParamTask) *model.ParamStoreData {
+	if task == nil || p.inst == nil {
+		return nil
+	}
+	dumped := sdumpSafe(task.Value)
+	data := compress(dumped)
+	return &model.ParamStoreData{
+		ID:       p.inst.nextParamID(uint64(task.Position + 1)),
+		TraceID:  task.TraceID,
+		Position: task.Position,
+		Data:     data,
+	}
+}
+
+// 将指针接收者任务构建为可入库的数据（含差异与缓存）
+func (p *paramPipeline) buildParamFromReceiverTask(task *processPointerReceiverTask) *model.ParamStoreData {
+	if task == nil || p.inst == nil {
+		return nil
+	}
+	receiverDataStr := sdumpSafe(task.Receiver)
+	paramStoreData := &model.ParamStoreData{
+		ID:         p.inst.nextParamID(0),
+		TraceID:    task.TraceID,
+		Position:   0,
+		IsReceiver: true,
+	}
+
+	var (
+		cache *model.ParamCache
+		err   error
+	)
+	key := "recv:" + task.StableKey
+	_, _, _ = p.inst.recvSFG.Do(key, func() (interface{}, error) {
+		cache, err = repositoryFactory.GetParamRepository().FindParamCacheByAddr(task.StableKey)
+		return nil, nil
+	})
+
+	needCreateCache := false
+	if err != nil {
+		p.inst.log.WithFields(logrus.Fields{"error": err, "stableKey": task.StableKey}).Error("failed to get param from database cache")
+		paramStoreData.Data = compress(receiverDataStr)
+	} else if cache != nil {
+		originalDataStr := decompress(cache.Data)
+		if diff, derr := createJSONPatch(originalDataStr, receiverDataStr); derr != nil {
+			p.inst.log.WithFields(logrus.Fields{"error": derr, "stableKey": task.StableKey}).Warn("failed to create json patch, storing full data")
+			paramStoreData.Data = compress(receiverDataStr)
+		} else {
+			paramStoreData.Data = compress(diff)
+			paramStoreData.BaseID = cache.BaseID
+		}
+	} else {
+		// 首次遇到这个对象
+		paramStoreData.Data = compress(receiverDataStr)
+		needCreateCache = true
+	}
+
+	if needCreateCache {
+		newCache := &model.ParamCache{
+			Addr:   task.StableKey,
+			BaseID: paramStoreData.ID,
+			Data:   paramStoreData.Data,
+		}
+		_, _, _ = p.inst.recvSFG.Do(key+":save", func() (interface{}, error) {
+			if _, err := repositoryFactory.GetParamRepository().SaveParamCache(newCache); err != nil {
+				p.inst.log.WithFields(logrus.Fields{"error": err, "stableKey": task.StableKey}).Warn("failed to save param cache")
+			}
+			return nil, nil
+		})
+	}
+	return paramStoreData
 }
 
 // ---- Goroutine 管道实现：串行处理，ctx 控制退出 ----
