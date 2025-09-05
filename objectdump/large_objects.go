@@ -126,6 +126,82 @@ func init() {
 	RegisterLargeObject("reflect.", func(v reflect.Value) (string, bool) {
 		return fmt.Sprintf("<%s>", v.Type().String()), true
 	})
+
+	// bolt/bbolt 数据库相关类型 - 这些类型包含 mmap 内存，访问时可能触发 SIGSEGV
+	RegisterLargeObject("bbolt.", func(v reflect.Value) (string, bool) {
+		return fmt.Sprintf("<%s:skipped_mmap_memory>", v.Type().String()), true
+	})
+
+	RegisterLargeObject("bolt.", func(v reflect.Value) (string, bool) {
+		return fmt.Sprintf("<%s:skipped_mmap_memory>", v.Type().String()), true
+	})
+
+	RegisterLargeObject("go.etcd.io/bbolt.", func(v reflect.Value) (string, bool) {
+		return fmt.Sprintf("<%s:skipped_mmap_memory>", v.Type().String()), true
+	})
+
+	RegisterLargeObject("github.com/boltdb/bolt.", func(v reflect.Value) (string, bool) {
+		return fmt.Sprintf("<%s:skipped_mmap_memory>", v.Type().String()), true
+	})
+
+	// 常见的 bolt 具体类型
+	RegisterLargeObject("*bbolt.DB", func(v reflect.Value) (string, bool) {
+		return "<bbolt.DB:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("*bbolt.Tx", func(v reflect.Value) (string, bool) {
+		return "<bbolt.Tx:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("*bbolt.Bucket", func(v reflect.Value) (string, bool) {
+		return "<bbolt.Bucket:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("*bbolt.Cursor", func(v reflect.Value) (string, bool) {
+		return "<bbolt.Cursor:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("bbolt.DB", func(v reflect.Value) (string, bool) {
+		return "<bbolt.DB:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("bbolt.Tx", func(v reflect.Value) (string, bool) {
+		return "<bbolt.Tx:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("bbolt.Bucket", func(v reflect.Value) (string, bool) {
+		return "<bbolt.Bucket:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("bbolt.Cursor", func(v reflect.Value) (string, bool) {
+		return "<bbolt.Cursor:skipped_mmap_memory>", true
+	})
+
+	// 旧版本 bolt 库
+	RegisterLargeObject("*bolt.DB", func(v reflect.Value) (string, bool) {
+		return "<bolt.DB:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("*bolt.Tx", func(v reflect.Value) (string, bool) {
+		return "<bolt.Tx:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("*bolt.Bucket", func(v reflect.Value) (string, bool) {
+		return "<bolt.Bucket:skipped_mmap_memory>", true
+	})
+
+	RegisterLargeObject("*bolt.Cursor", func(v reflect.Value) (string, bool) {
+		return "<bolt.Cursor:skipped_mmap_memory>", true
+	})
+
+	// 其他可能包含 unsafe 内存的系统类型
+	RegisterLargeObject("syscall.", func(v reflect.Value) (string, bool) {
+		return fmt.Sprintf("<%s:skipped_syscall>", v.Type().String()), true
+	})
+
+	RegisterLargeObject("unsafe.", func(v reflect.Value) (string, bool) {
+		return fmt.Sprintf("<%s:skipped_unsafe>", v.Type().String()), true
+	})
 }
 
 // RegisterLargeObject 注册一个大对象处理器

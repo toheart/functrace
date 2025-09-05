@@ -11,6 +11,15 @@ import (
 type ptrDumper struct{}
 
 func (d *ptrDumper) dump(ds *dumpState, v reflect.Value, depth int) interface{} {
+	// 基础有效性检查
+	if !v.IsValid() {
+		return fmt.Sprintf("<%s:invalid>", v.Type().String())
+	}
+
+	if v.Kind() != reflect.Ptr {
+		return fmt.Sprintf("<%s:not_pointer>", v.Type().String())
+	}
+
 	// Circular reference detection
 	if v.CanAddr() {
 		addr := v.UnsafeAddr()
@@ -29,8 +38,44 @@ func (d *ptrDumper) dump(ds *dumpState, v reflect.Value, depth int) interface{} 
 	if v.IsNil() {
 		return nil
 	}
+
+	// 额外的指针安全性检查
+	ptrAddr := v.Pointer()
+	if ptrAddr == 0 {
+		return fmt.Sprintf("<%s:null_pointer>", v.Type().String())
+	}
+
+	// 安全检查：验证指针是否可以安全解引用
+	var result interface{}
+	var hasError bool
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// 如果解引用时 panic，返回安全描述
+				result = fmt.Sprintf("<%s:unsafe_deref:%v>", v.Type().String(), r)
+				hasError = true
+			}
+		}()
+
+		// 先检查解引用后的值是否有效
+		elem := v.Elem()
+		if !elem.IsValid() {
+			result = fmt.Sprintf("<%s:invalid_target>", v.Type().String())
+			hasError = true
+			return
+		}
+
+		if !hasError {
+			result = ds.dumpWithDepth(elem, depth)
+		}
+	}()
+
+	if hasError {
+		return result
+	}
+
 	// 解引用指针不计入逻辑深度，避免多层 *T 过早触发 MaxDepth
-	return ds.dumpWithDepth(v.Elem(), depth)
+	return result
 }
 
 type structDumper struct{}
@@ -197,23 +242,7 @@ func (d *sliceDumper) dump(ds *dumpState, v reflect.Value, depth int) interface{
 }
 
 func (d *sliceDumper) dumpByteSlice(ds *dumpState, v reflect.Value) interface{} {
-	b := v.Bytes()
-	totalLen := len(b)
-	end := totalLen
-	for end > 0 && b[end-1] == 0 {
-		end--
-	}
-	zeroCount := totalLen - end
-	var outStr string
-	if isPrintableOrControlASCII(b[:end]) || isJSON(b[:end]) {
-		outStr = string(b[:end])
-	} else {
-		outStr = hex.EncodeToString(b[:end])
-	}
-	if zeroCount > 0 {
-		outStr += fmt.Sprintf("...(truncated, %d zero bytes omitted, total %d bytes)", zeroCount, totalLen)
-	}
-	return outStr
+	return safeDumpBytes(v, "slice")
 }
 
 func (d *sliceDumper) dumpGenericSlice(ds *dumpState, v reflect.Value, depth int) interface{} {
@@ -250,29 +279,13 @@ func (d *arrayDumper) dump(ds *dumpState, v reflect.Value, depth int) interface{
 }
 
 func (d *arrayDumper) dumpByteArray(ds *dumpState, v reflect.Value) interface{} {
-	b := v.Bytes()
-	totalLen := len(b)
-	end := totalLen
-	for end > 0 && b[end-1] == 0 {
-		end--
-	}
-	zeroCount := totalLen - end
-	var outStr string
-	if isPrintableOrControlASCII(b[:end]) || isJSON(b[:end]) {
-		outStr = string(b[:end])
-	} else {
-		outStr = hex.EncodeToString(b[:end])
-	}
-	if zeroCount > 0 {
-		outStr += fmt.Sprintf("...(truncated, %d zero bytes omitted, total %d bytes)", zeroCount, totalLen)
-	}
-	return outStr
+	return safeDumpBytes(v, "array")
 }
 
 func (d *arrayDumper) dumpGenericArray(ds *dumpState, v reflect.Value, depth int) interface{} {
 	maxElem := ds.cs.MaxElementsPerContainer
 	if maxElem <= 0 {
-		maxElem = 1000 // Default limit
+		maxElem = 10 // Default limit
 	}
 	arr := make([]interface{}, 0, v.Len())
 	limit := v.Len()
@@ -300,4 +313,172 @@ func (d *interfaceDumper) dump(ds *dumpState, v reflect.Value, depth int) interf
 	}
 	// 接口拆箱不增加深度，保证业务结构的层级更直观
 	return ds.dumpWithDepth(v.Elem(), depth)
+}
+
+// safeDumpBytes 统一的安全字节数组/切片转储函数
+func safeDumpBytes(v reflect.Value, typeName string) interface{} {
+	// 基础有效性检查
+	if !v.IsValid() {
+		return "[]byte{<invalid_value>}"
+	}
+
+	// 检查类型是否正确
+	if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
+		return fmt.Sprintf("[]byte{<wrong_type_%s>}", v.Kind().String())
+	}
+
+	// 检查元素类型
+	if v.Type().Elem().Kind() != reflect.Uint8 {
+		return fmt.Sprintf("[]byte{<wrong_elem_type_%s>}", v.Type().Elem().Kind().String())
+	}
+
+	// 检查空指针（针对切片）
+	if v.Kind() == reflect.Slice {
+		if v.Len() > 0 && v.Pointer() == 0 {
+			return fmt.Sprintf("[]byte{<nil_data_len_%d>}", v.Len())
+		}
+		if v.IsNil() {
+			return "[]byte{<nil_slice>}"
+		}
+	}
+
+	// 尝试获取字节数据
+	b, err := safeGetBytes(v)
+	if err != nil {
+		return fmt.Sprintf("[]byte{<access_failed_len_%d_err_%s>}", v.Len(), err.Error())
+	}
+
+	totalLen := len(b)
+	if totalLen == 0 {
+		return ""
+	}
+
+	// 安全查找末尾零字节
+	end := safeFindNonZeroEnd(b, totalLen)
+	zeroCount := totalLen - end
+
+	// 安全处理内容
+	var outStr string
+	if end > 0 {
+		outStr = safeFormatBytes(b[:end], typeName, totalLen)
+	} else {
+		outStr = ""
+	}
+
+	if zeroCount > 0 {
+		outStr += fmt.Sprintf("...(truncated, %d zero bytes omitted, total %d bytes)", zeroCount, totalLen)
+	}
+	return outStr
+}
+
+func safeGetBytes(v reflect.Value) ([]byte, error) {
+	// 预检查
+	if !v.IsValid() {
+		return nil, fmt.Errorf("invalid reflect value")
+	}
+
+	if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
+		return nil, fmt.Errorf("not a slice or array")
+	}
+
+	if v.Type().Elem().Kind() != reflect.Uint8 {
+		return nil, fmt.Errorf("not a byte slice/array")
+	}
+
+	// 检查长度
+	if v.Len() == 0 {
+		return []byte{}, nil
+	}
+
+	// 对于切片，检查指针
+	if v.Kind() == reflect.Slice && v.Pointer() == 0 {
+		return nil, fmt.Errorf("nil slice pointer with non-zero length")
+	}
+
+	var result []byte
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic accessing bytes: %v", r)
+				result = nil
+			}
+		}()
+
+		// 尝试获取字节数据
+		result = v.Bytes()
+
+		// 额外验证：确保返回的切片长度正确
+		if result != nil && len(result) != v.Len() {
+			err = fmt.Errorf("length mismatch: expected %d, got %d", v.Len(), len(result))
+			result = nil
+		}
+	}()
+
+	return result, err
+}
+
+func safeFindNonZeroEnd(b []byte, totalLen int) int {
+	// 安全性检查：确保切片有效且不为空
+	if len(b) == 0 || totalLen <= 0 {
+		return 0
+	}
+
+	// 确保totalLen不超过实际长度
+	if totalLen > len(b) {
+		totalLen = len(b)
+	}
+
+	end := totalLen
+
+	// 使用更安全的方式访问字节数组
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// 发生panic时保持totalLen，不进行任何截断
+				end = totalLen
+			}
+		}()
+
+		// 额外的边界检查
+		if totalLen > 0 && totalLen <= len(b) {
+			// 从后往前查找非零字节，使用更安全的索引访问
+			for i := totalLen - 1; i >= 0; i-- {
+				if i < len(b) && b[i] != 0 {
+					end = i + 1
+					break
+				}
+				if i == 0 {
+					// 所有字节都是0
+					end = 0
+					break
+				}
+			}
+		}
+	}()
+
+	return end
+}
+
+func safeFormatBytes(b []byte, typeName string, totalLen int) string {
+	var result string
+	func() {
+		defer func() {
+			if recover() != nil {
+				result = fmt.Sprintf("<unsafe_byte_%s_len_%d>", typeName, totalLen)
+			}
+		}()
+
+		if len(b) == 0 {
+			result = ""
+			return
+		}
+
+		if isPrintableOrControlASCII(b) || isJSON(b) {
+			result = string(b)
+		} else {
+			result = hex.EncodeToString(b)
+		}
+	}()
+	return result
 }
